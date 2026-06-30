@@ -16,7 +16,7 @@ import {
   BookMarked
 } from 'lucide-react';
 
-const API_BASE = 'http://127.0.0.1:8080/api'; // Connects to the local runner/playground backend
+const API_BASE = 'http://127.0.0.1:8000/api'; // Connects to the local runner/playground backend
 const USER_ID = 'default-user';
 
 // Color palette for the skeuomorphic book spines
