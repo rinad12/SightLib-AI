@@ -1,0 +1,24 @@
+database:
+  engine: "Cloud SQL PostgreSQL 15"
+  tables:
+    users:
+      description: "User profiles (Google Authentication)"
+      columns:
+        id: { type: "UUID", primary_key: true, description: "Unique user ID (mapped from Google Auth ID)" }
+        created_at: { type: "TIMESTAMP", description: "Profile creation timestamp" }
+    books:
+      description: "Global book directory, enriched with web search data"
+      columns:
+        id: { type: "UUID", primary_key: true, description: "Unique book ID" }
+        title: { type: "VARCHAR(255)", description: "Book title (extracted via OCR)" }
+        author: { type: "VARCHAR(255)", description: "Author(s)" }
+        genre: { type: "VARCHAR(100)", description: "Genre (enriched via web-search-mcp)" }
+        description: { type: "TEXT", description: "Short description or synopsis" }
+    user_library:
+      description: "Many-to-Many junction table defining books in a specific user's library"
+      columns:
+        id: { type: "UUID", primary_key: true, description: "Unique record ID" }
+        user_id: { type: "UUID", foreign_key: "users.id", description: "User reference. WARNING: Injected at DB/MCP level, agent does not pass this!" }
+        book_id: { type: "UUID", foreign_key: "books.id", description: "Book reference" }
+        status: { type: "VARCHAR(50)", description: "Reading status (unread, reading, read)" }
+        added_at: { type: "TIMESTAMP", description: "Date added by user" }
