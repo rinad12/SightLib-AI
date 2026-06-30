@@ -36,10 +36,17 @@ import json
 import uuid
 
 load_dotenv()
-setup_telemetry()
-_, project_id = google.auth.default()
-logging_client = google_cloud_logging.Client()
-logger = logging_client.logger(__name__)
+
+import logging
+logger = logging.getLogger(__name__)
+
+try:
+    setup_telemetry()
+    _, project_id = google.auth.default()
+    logging_client = google_cloud_logging.Client()
+    logger = logging_client.logger(__name__)
+except Exception as e:
+    print(f"Skipping GCP telemetry setup (running in offline mode): {e}")
 allow_origins = (
     os.getenv("ALLOW_ORIGINS", "").split(",") if os.getenv("ALLOW_ORIGINS") else None
 )
