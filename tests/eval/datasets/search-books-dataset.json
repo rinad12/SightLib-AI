@@ -1,0 +1,129 @@
+{
+  "eval_cases": [
+    {
+      "eval_case_id": "search_books_expected_flow",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Search for fantasy books"
+          }
+        ]
+      },
+      "expected_tool_calls": [
+        {
+          "name": "get_user_library"
+        },
+        {
+          "name": "find_books_by_context",
+          "args": {
+            "user_prompt": "fantasy books",
+            "library_summary": "A collection of fantasy novels."
+          }
+        }
+      ],
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "{\n  \"component\": \"List\",\n  \"status\": \"success\",\n  \"items\": [\n    {\n      \"title\": \"The Way of Kings\",\n      \"author\": \"Brandon Sanderson\",\n      \"genre\": \"Epic Fantasy\",\n      \"description\": \"An epic fantasy novel...\"\n    }\n  ]\n}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "eval_case_id": "search_books_contradictory_library",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Search for cooking recipes (contradicts library)"
+          }
+        ]
+      },
+      "expected_tool_calls": [
+        {
+          "name": "get_user_library"
+        },
+        {
+          "name": "find_books_by_context",
+          "args": {
+            "user_prompt": "cooking recipes",
+            "library_summary": ""
+          }
+        }
+      ],
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "{\n  \"component\": \"List\",\n  \"status\": \"success\",\n  \"items\": [\n    {\n      \"title\": \"The Joy of Cooking\",\n      \"author\": \"Irma S. Rombauer\",\n      \"genre\": \"Cooking\",\n      \"description\": \"A classic cookbook...\"\n    }\n  ]\n}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "eval_case_id": "search_books_no_user_prompt",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Search (empty prompt)"
+          }
+        ]
+      },
+      "expected_tool_calls": [
+        {
+          "name": "get_user_library"
+        },
+        {
+          "name": "find_books_by_context",
+          "args": {
+            "user_prompt": "",
+            "library_summary": "A collection of science fiction novels."
+          }
+        }
+      ],
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "{\n  \"component\": \"List\",\n  \"status\": \"success\",\n  \"items\": [\n    {\n      \"title\": \"Foundation\",\n      \"author\": \"Isaac Asimov\",\n      \"genre\": \"Sci-Fi\",\n      \"description\": \"A classic science fiction novel...\"\n    }\n  ]\n}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "eval_case_id": "search_books_absolute_zero_context",
+      "prompt": {
+        "role": "user",
+        "parts": [
+          {
+            "text": "Search (empty prompt, empty library)"
+          }
+        ]
+      },
+      "expected_tool_calls": [
+        {
+          "name": "get_user_library"
+        }
+      ],
+      "reference": {
+        "response": {
+          "role": "model",
+          "parts": [
+            {
+              "text": "{\n  \"component\": \"Card\",\n  \"status\": \"no_context\",\n  \"data\": {\n    \"title\": null,\n    \"author\": null,\n    \"genre\": null,\n    \"description\": \"Please enter a search term or add books to your library first.\"\n  }\n}"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

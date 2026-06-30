@@ -155,6 +155,7 @@ async def save_book(
 async def find_books_by_context(
     user_prompt: str | None = None,
     library_summary: str | None = None,
+    format: str = "Carousel",
     tool_context: Context = None
 ) -> dict:
     """Searches for book recommendations based on user prompt and reading history.
@@ -162,6 +163,7 @@ async def find_books_by_context(
     Args:
         user_prompt: Optional user preference prompt.
         library_summary: Summary of user's reading history.
+        format: Output component format ("Carousel" or "List").
         tool_context: The execution context.
     """
     items = []
@@ -188,21 +190,25 @@ async def find_books_by_context(
 
         for book in raw_books:
             if isinstance(book, dict):
-                items.append({
-                    "component": "Card",
-                    "status": "success",
-                    "data": {
-                        "title": book.get("title"),
-                        "author": book.get("author"),
-                        "genre": book.get("genre"),
-                        "description": book.get("description")
-                    }
-                })
+                book_data = {
+                    "title": book.get("title"),
+                    "author": book.get("author"),
+                    "genre": book.get("genre"),
+                    "description": book.get("description")
+                }
+                if format == "List":
+                    items.append(book_data)
+                else:
+                    items.append({
+                        "component": "Card",
+                        "status": "success",
+                        "data": book_data
+                    })
     except Exception as e:
         logger.exception("Failed to find books by context")
 
     return {
-        "component": "Carousel",
+        "component": format,
         "status": status,
         "items": items
     }
@@ -210,7 +216,7 @@ async def find_books_by_context(
 
 INSTRUCTION = (
     "You are a headless automated book pipeline agent. You react to triggers and return strictly typed A2UI JSON payloads.\n"
-    "Your final response MUST be a valid JSON object matching the A2UI specifications (either a Card or Carousel component) with no additional text or conversational wrapper.\n\n"
+    "Your final response MUST be a valid JSON object matching the A2UI specifications (either a Card, Carousel, or List component) with no additional text or conversational wrapper.\n\n"
     "CRITICAL RULES:\n"
     "1. Handling OCR Processing (process-book-photo):\n"
     "   - If the user prompt indicates a blurry or unreadable cover photo (e.g. prompt contains '(blurry)'), or if the OCR yields no text, output the A2UI Card with status 'manual_input_required' directly:\n"
@@ -240,7 +246,24 @@ INSTRUCTION = (
     "     }\n"
     "     Do not call any tools.\n"
     "   - Otherwise, call get_user_library. If the user library is empty (returns an empty list or nothing), output the fallback Carousel with status 'empty_library' containing the universal bestsellers: 'To Kill a Mockingbird' by Harper Lee, '1984' by George Orwell, and 'The Great Gatsby' by F. Scott Fitzgerald. Do not call find_books_by_context.\n"
-    "   - If get_user_library returns books, generate a concise library summary, then call find_books_by_context. Output the JSON object returned by find_books_by_context word-for-word as your final response."
+    "   - If get_user_library returns books, generate a concise library summary, then call find_books_by_context. Output the JSON object returned by find_books_by_context word-for-word as your final response.\n\n"
+    "3. Handling Contextual Internet Search (search-books):\n"
+    "   - If the prompt indicates BOTH the search query is empty AND the user's library is empty (e.g. prompt contains 'Search (empty prompt, empty library)'), or both are empty, the agent must short-circuit. Output the A2UI Card with status 'no_context' directly:\n"
+    "     {\n"
+    "       \"component\": \"Card\",\n"
+    "       \"status\": \"no_context\",\n"
+    "       \"data\": {\n"
+    "         \"title\": null,\n"
+    "         \"author\": null,\n"
+    "         \"genre\": null,\n"
+    "         \"description\": \"Please enter a search term or add books to your library first.\"\n"
+    "       }\n"
+    "     }\n"
+    "     Do not call any tools in this case.\n"
+    "   - Otherwise, call get_user_library.\n"
+    "   - If get_user_library returns an empty list, OR if the user prompt strongly contradicts the library context (e.g. library contains Sci-Fi but prompt is 'Search for cooking recipes (contradicts library)'), ignore the library context (set library_summary to ''). Extract the search topic (e.g. 'cooking recipes'), then call find_books_by_context with user_prompt=topic, library_summary='', and format='List'. Output the JSON object returned by find_books_by_context word-for-word.\n"
+    "   - If the user prompt is empty or indicates no search term (e.g. contains 'Search (empty prompt)'), rely solely on the library context. Generate a concise library summary (e.g. 'A collection of science fiction novels.'), then call find_books_by_context with user_prompt='', library_summary=summary, and format='List'. Output the JSON object returned by find_books_by_context word-for-word.\n"
+    "   - Otherwise, generate a library summary (e.g. 'A collection of fantasy novels.'), extract the search query (e.g. 'fantasy books' from 'Search for fantasy books'), and call find_books_by_context with user_prompt=query, library_summary=summary, and format='List'. Output the JSON response returned by find_books_by_context word-for-word."
 )
 
 
