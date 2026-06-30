@@ -30,37 +30,49 @@ os.environ["GOOGLE_CLOUD_LOCATION"] = "global"
 os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "True"
 
 
-def get_weather(query: str) -> str:
-    """Simulates a web search. Use it get information on weather.
-
-    Args:
-        query: A string containing the location to get weather information for.
-
-    Returns:
-        A string with the simulated weather information for the queried location.
-    """
-    if "sf" in query.lower() or "san francisco" in query.lower():
-        return "It's 60 degrees and foggy."
-    return "It's 90 degrees and sunny."
+from google.adk.tools.mcp_tool import McpToolset
+from google.adk.tools.mcp_tool.mcp_session_manager import SseConnectionParams
 
 
-def get_current_time(query: str) -> str:
-    """Simulates getting the current time for a city.
+def library_db_header_provider(readonly_context) -> dict[str, str]:
+    """Provides authorization headers and user ID for the library database MCP."""
+    headers = {}
+    token = os.environ.get("GCP_SECRET_MANAGER_DB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
 
-    Args:
-        city: The name of the city to get the current time for.
+    # Inject authenticated User ID from context strictly at the infrastructure layer
+    user_id = getattr(readonly_context, "user_id", None)
+    if user_id:
+        headers["X-User-ID"] = str(user_id)
 
-    Returns:
-        A string with the current time information.
-    """
-    if "sf" in query.lower() or "san francisco" in query.lower():
-        tz_identifier = "America/Los_Angeles"
-    else:
-        return f"Sorry, I don't have timezone information for query: {query}."
+    return headers
 
-    tz = ZoneInfo(tz_identifier)
-    now = datetime.datetime.now(tz)
-    return f"The current time for query {query} is {now.strftime('%Y-%m-%d %H:%M:%S %Z%z')}"
+
+def web_search_header_provider(readonly_context) -> dict[str, str]:
+    """Provides authorization headers for the web search MCP."""
+    headers = {}
+    token = os.environ.get("GCP_SECRET_MANAGER_SEARCH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    return headers
+
+
+# Define remote MCP toolsets using Server-Sent Events (SSE)
+db_mcp_toolset = McpToolset(
+    connection_params=SseConnectionParams(
+        url="https://gcp-postgres-mcp-service.a.run.app/sse"
+    ),
+    header_provider=library_db_header_provider,
+)
+
+search_mcp_toolset = McpToolset(
+    connection_params=SseConnectionParams(
+        url="https://custom-search-mcp-service.a.run.app/sse"
+    ),
+    header_provider=web_search_header_provider,
+)
 
 
 root_agent = Agent(
@@ -70,7 +82,7 @@ root_agent = Agent(
         retry_options=types.HttpRetryOptions(attempts=3),
     ),
     instruction="You are a helpful AI assistant designed to provide accurate and useful information.",
-    tools=[get_weather, get_current_time],
+    tools=[db_mcp_toolset, search_mcp_toolset],
 )
 
 app = App(
