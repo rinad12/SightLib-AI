@@ -330,7 +330,7 @@ async def book_pipeline(ctx: Context, node_input: Any) -> str:
         return json.dumps(card, indent=2)
 
     # --- ROUTE 2: recommend-books ---
-    elif "recommend" in text_lower:
+    elif "recom" in text_lower:
         if "quota exceeded" in text_lower:
             res = {
                 "component": "Card",
