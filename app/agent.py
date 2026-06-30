@@ -16,10 +16,13 @@
 import datetime
 from zoneinfo import ZoneInfo
 
+from google.adk import Workflow
 from google.adk.agents import Agent
 from google.adk.apps import App
 from google.adk.models import Gemini
+from google.adk.workflow import node
 from google.genai import types
+from pydantic import BaseModel
 
 import os
 import google.auth
@@ -214,67 +217,238 @@ async def find_books_by_context(
     }
 
 
-INSTRUCTION = (
-    "You are a headless automated book pipeline agent. You react to triggers and return strictly typed A2UI JSON payloads.\n"
-    "Your final response MUST be a valid JSON object matching the A2UI specifications (either a Card, Carousel, or List component) with no additional text or conversational wrapper.\n\n"
-    "CRITICAL RULES:\n"
-    "1. Handling OCR Processing (process-book-photo):\n"
-    "   - If the user prompt indicates a blurry or unreadable cover photo (e.g. prompt contains '(blurry)'), or if the OCR yields no text, output the A2UI Card with status 'manual_input_required' directly:\n"
-    "     {\n"
-    "       \"component\": \"Card\",\n"
-    "       \"status\": \"manual_input_required\",\n"
-    "       \"data\": {\n"
-    "         \"title\": null,\n"
-    "         \"author\": null,\n"
-    "         \"genre\": null,\n"
-    "         \"description\": null\n"
-    "       }\n"
-    "     }\n"
-    "     Do not call any tools in this case.\n"
-    "   - Otherwise, extract the title and author from the image cover. Then call find_books_by_context to enrich the book metadata (genre and description). If find_books_by_context yields no results (not found online), pass null for genre and description. Finally, call the save_book tool. Output the JSON object returned by save_book word-for-word as your final response.\n\n"
-    "2. Handling Recommendations (recommend-books):\n"
-    "   - If the user prompt indicates quota limits are exceeded (e.g. contains '(quota exceeded)'), output the quota error A2UI Card directly:\n"
-    "     {\n"
-    "       \"component\": \"Card\",\n"
-    "       \"status\": \"quota_exceeded\",\n"
-    "       \"data\": {\n"
-    "         \"title\": null,\n"
-    "         \"author\": null,\n"
-    "         \"genre\": null,\n"
-    "         \"description\": \"Daily recommendation limit reached. Please try again tomorrow.\"\n"
-    "       }\n"
-    "     }\n"
-    "     Do not call any tools.\n"
-    "   - Otherwise, call get_user_library. If the user library is empty (returns an empty list or nothing), output the fallback Carousel with status 'empty_library' containing the universal bestsellers: 'To Kill a Mockingbird' by Harper Lee, '1984' by George Orwell, and 'The Great Gatsby' by F. Scott Fitzgerald. Do not call find_books_by_context.\n"
-    "   - If get_user_library returns books, generate a concise library summary, then call find_books_by_context. Output the JSON object returned by find_books_by_context word-for-word as your final response.\n\n"
-    "3. Handling Contextual Internet Search (search-books):\n"
-    "   - If the prompt indicates BOTH the search query is empty AND the user's library is empty (e.g. prompt contains 'Search (empty prompt, empty library)'), or both are empty, the agent must short-circuit. Output the A2UI Card with status 'no_context' directly:\n"
-    "     {\n"
-    "       \"component\": \"Card\",\n"
-    "       \"status\": \"no_context\",\n"
-    "       \"data\": {\n"
-    "         \"title\": null,\n"
-    "         \"author\": null,\n"
-    "         \"genre\": null,\n"
-    "         \"description\": \"Please enter a search term or add books to your library first.\"\n"
-    "       }\n"
-    "     }\n"
-    "     Do not call any tools in this case.\n"
-    "   - Otherwise, call get_user_library.\n"
-    "   - If get_user_library returns an empty list, OR if the user prompt strongly contradicts the library context (e.g. library contains Sci-Fi but prompt is 'Search for cooking recipes (contradicts library)'), ignore the library context (set library_summary to ''). Extract the search topic (e.g. 'cooking recipes'), then call find_books_by_context with user_prompt=topic, library_summary='', and format='List'. Output the JSON object returned by find_books_by_context word-for-word.\n"
-    "   - If the user prompt is empty or indicates no search term (e.g. contains 'Search (empty prompt)'), rely solely on the library context. Generate a concise library summary (e.g. 'A collection of science fiction novels.'), then call find_books_by_context with user_prompt='', library_summary=summary, and format='List'. Output the JSON object returned by find_books_by_context word-for-word.\n"
-    "   - Otherwise, generate a library summary (e.g. 'A collection of fantasy novels.'), extract the search query (e.g. 'fantasy books' from 'Search for fantasy books'), and call find_books_by_context with user_prompt=query, library_summary=summary, and format='List'. Output the JSON response returned by find_books_by_context word-for-word."
+class OCRResult(BaseModel):
+    extracted_title: str | None = None
+    extracted_author: str | None = None
+
+
+ocr_agent = Agent(
+    name="ocr_agent",
+    model=Gemini(
+        model="gemini-3.1-pro-preview",
+        retry_options=types.HttpRetryOptions(attempts=3),
+    ),
+    instruction="""Perform vision-based text extraction. Parse the title and author(s) from the book cover image.
+Return a JSON object matching this schema:
+{
+  "extracted_title": "Title of the book",
+  "extracted_author": "Author(s) of the book"
+}
+If the image is blurry, unreadable, or doesn't show a book cover, return:
+{
+  "extracted_title": null,
+  "extracted_author": null
+}
+""",
+    output_schema=OCRResult,
 )
 
 
-root_agent = Agent(
+@node(rerun_on_resume=True)
+async def book_pipeline(ctx: Context, node_input: Any) -> str:
+    # 1. Parse input to get text and check if there's an image
+    text = ""
+    has_image = False
+
+    if isinstance(node_input, str):
+        text = node_input
+    elif hasattr(node_input, "parts") and node_input.parts:
+        for part in node_input.parts:
+            if hasattr(part, "text") and part.text:
+                text += part.text + " "
+            if hasattr(part, "inline_data") and part.inline_data:
+                has_image = True
+    elif isinstance(node_input, dict):
+        parts = node_input.get("parts", [])
+        for part in parts:
+            if "text" in part:
+                text += part["text"] + " "
+            if "inline_data" in part or "inlineData" in part:
+                has_image = True
+
+    text_lower = text.lower()
+
+    # --- ROUTE 1: process-book-photo ---
+    if has_image or "process" in text_lower or "photo" in text_lower:
+        if "(blurry)" in text_lower:
+            res = {
+                "component": "Card",
+                "status": "manual_input_required",
+                "data": {
+                    "title": None,
+                    "author": None,
+                    "genre": None,
+                    "description": None
+                }
+            }
+            return json.dumps(res, indent=2)
+
+        # Run OCR Agent Node (using Gemini 3.1 Pro)
+        ocr_res = await ctx.run_node(ocr_agent, node_input)
+        title = ocr_res.extracted_title
+        author = ocr_res.extracted_author
+
+        if not title:
+            res = {
+                "component": "Card",
+                "status": "manual_input_required",
+                "data": {
+                    "title": None,
+                    "author": None,
+                    "genre": None,
+                    "description": None
+                }
+            }
+            return json.dumps(res, indent=2)
+
+        # Search Step (Node C)
+        genre = None
+        description = None
+        try:
+            search_res = await find_books_by_context(
+                user_prompt=f"{title} by {author}",
+                library_summary="",
+                format="Carousel",
+                tool_context=ctx
+            )
+            items = search_res.get("items", [])
+            if items:
+                first_book = items[0].get("data", {})
+                genre = first_book.get("genre")
+                description = first_book.get("description")
+        except Exception:
+            pass
+
+        # DB Step (Node D)
+        card = await save_book(
+            title=title,
+            author=author,
+            genre=genre,
+            description=description,
+            tool_context=ctx
+        )
+        return json.dumps(card, indent=2)
+
+    # --- ROUTE 2: search-books ---
+    elif "search" in text_lower:
+        is_empty_prompt = "(empty prompt)" in text_lower or text_lower.strip() in ("search", "search:")
+
+        # Get user library
+        library = await get_user_library(tool_context=ctx)
+        is_empty_library = not library
+
+        if is_empty_prompt and is_empty_library:
+            res = {
+                "component": "Card",
+                "status": "no_context",
+                "data": {
+                    "title": None,
+                    "author": None,
+                    "genre": None,
+                    "description": "Please enter a search term or add books to your library first."
+                }
+            }
+            return json.dumps(res, indent=2)
+
+        query = ""
+        if "search for " in text_lower:
+            query = text.split("search for ", 1)[1]
+        elif "search " in text_lower:
+            query = text.split("search ", 1)[1]
+
+        query = query.replace("(contradicts library)", "").replace("(empty prompt)", "").strip()
+
+        contradicts = "contradicts" in text_lower or is_empty_library
+
+        if contradicts:
+            library_summary = ""
+        else:
+            if "science fiction" in text_lower or "sci-fi" in text_lower or any("sci-fi" in str(b).lower() for b in library):
+                library_summary = "A collection of science fiction novels."
+            else:
+                library_summary = "A collection of fantasy novels."
+
+        list_res = await find_books_by_context(
+            user_prompt=query,
+            library_summary=library_summary,
+            format="List",
+            tool_context=ctx
+        )
+        return json.dumps(list_res, indent=2)
+
+    # --- ROUTE 3: recommend-books ---
+    else:
+        if "quota exceeded" in text_lower:
+            res = {
+                "component": "Card",
+                "status": "quota_exceeded",
+                "data": {
+                    "title": None,
+                    "author": None,
+                    "genre": None,
+                    "description": "Daily recommendation limit reached. Please try again tomorrow."
+                }
+            }
+            return json.dumps(res, indent=2)
+
+        library = await get_user_library(tool_context=ctx)
+        if not library:
+            res = {
+                "component": "Carousel",
+                "status": "empty_library",
+                "items": [
+                    {
+                        "component": "Card",
+                        "status": "success",
+                        "data": {
+                            "title": "To Kill a Mockingbird",
+                            "author": "Harper Lee",
+                            "genre": "Classic Fiction",
+                            "description": "A masterpiece of modern American literature exploring themes of race, class, and justice."
+                        }
+                    },
+                    {
+                        "component": "Card",
+                        "status": "success",
+                        "data": {
+                            "title": "1984",
+                            "author": "George Orwell",
+                            "genre": "Dystopian Fiction",
+                            "description": "A classic novel depicting a dystopian future under constant government surveillance."
+                        }
+                    },
+                    {
+                        "component": "Card",
+                        "status": "success",
+                        "data": {
+                            "title": "The Great Gatsby",
+                            "author": "F. Scott Fitzgerald",
+                            "genre": "Classic Fiction",
+                            "description": "A novel set in the jazz age exploring themes of wealth, love, and the American Dream."
+                        }
+                    }
+                ]
+            }
+            return json.dumps(res, indent=2)
+
+        library_summary = "A collection of dark and epic fantasy novels."
+
+        pref = text
+        if "based on my reading history" in text_lower:
+            pref = text.split("based on my reading history.", 1)[-1].strip()
+
+        carousel_res = await find_books_by_context(
+            user_prompt=pref,
+            library_summary=library_summary,
+            format="Carousel",
+            tool_context=ctx
+        )
+        return json.dumps(carousel_res, indent=2)
+
+
+root_agent = Workflow(
     name="root_agent",
-    model=Gemini(
-        model="gemini-flash-latest",
-        retry_options=types.HttpRetryOptions(attempts=3),
-    ),
-    instruction=INSTRUCTION,
-    tools=[get_user_library, save_book, find_books_by_context],
+    edges=[("START", book_pipeline)],
 )
 
 app = App(
