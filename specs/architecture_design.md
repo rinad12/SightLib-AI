@@ -94,7 +94,7 @@ database:
 
 ```yaml
 manifest_version: "1.0"
-name: gridshelf-ai-agent
+name: sightlib-ai-agent
 version: "1.0.0"
 runtime: python312
 
