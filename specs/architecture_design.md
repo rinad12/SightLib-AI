@@ -50,6 +50,12 @@ To prevent LLM hallucinations and the use of deprecated APIs, the project must b
 * **Edge Case 1 (Empty Library):** If the DB returns an empty array (new user), the agent *must not* hallucinate. Fallback triggered: returns A2UI `Carousel` with a hardcoded list of universal bestsellers.
 * **Edge Case 2 (Quota Exceeded):** If the user hits the 5 requests/day limit, the pipeline (at the Policy Server level) blocks LLM execution and returns an A2UI `Card` indicating they must wait until tomorrow.
 
+### Scenario C: Contextual Internet Search (`search-books`)
+* **Expected Flow:** UI triggers search (with optional `user_prompt`) -> Backend checks limits -> Agent calls custom `get_user_library` tool -> Agent analyzes both the prompt and the library context -> Calls custom `find_books_by_context` -> Returns A2UI `List` of books found online that are *not* currently in the user's library.
+* **Edge Case 1 (Library is empty or irrelevant):** If the user's library is empty, OR if the `user_prompt` strongly contradicts the library context (e.g., library is "Sci-Fi", but prompt is "Cooking recipes"), the agent ignores the library summary and bases the web search *strictly* on the `user_prompt`.
+* **Edge Case 2 (No User Prompt):** If the `user_prompt` is empty (user just hits 'Search'), the agent relies *solely* on the `library_summary` to execute the web search and discover new relevant books.
+* **Edge Case 3 (Absolute Zero Context):** If BOTH the `user_prompt` is empty AND the user's library is empty, the agent *must short-circuit*. It does not call the web search MCP at all. Instead, it instantly returns an A2UI `Card` with `status: no_context` prompting the user to either enter a search term or add books to their library first.
+
 ## 4. Database Schema & Custom Tools
 
 To understand data structures, the relational schema is provided below. **Note:** The agent does not query these tables directly.
