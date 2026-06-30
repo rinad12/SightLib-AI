@@ -82,10 +82,14 @@ app: FastAPI = get_fast_api_app(
 app.title = "sightlib-ai-agent"
 app.description = "API for interacting with the Agent sightlib-ai-agent"
 
-# Enable CORS for frontend development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
+        "http://127.0.0.1:8080",
+        "http://localhost:8080",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

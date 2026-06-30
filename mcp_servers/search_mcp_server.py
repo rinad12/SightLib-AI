@@ -89,6 +89,6 @@ async def handle_sse(request: Request):
         await mcp_server.run(read_stream, write_stream, mcp_server.create_initialization_options())
 
 
-@app.post("/message")
+@app.post("/mcp")
 async def handle_message(request: Request):
     return await sse.handle_post_message(request.scope, request.receive, request._send)
