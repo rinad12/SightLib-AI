@@ -329,55 +329,8 @@ async def book_pipeline(ctx: Context, node_input: Any) -> str:
         )
         return json.dumps(card, indent=2)
 
-    # --- ROUTE 2: search-books ---
-    elif "search" in text_lower:
-        is_empty_prompt = "(empty prompt)" in text_lower or text_lower.strip() in ("search", "search:")
-
-        # Get user library
-        library = await get_user_library(tool_context=ctx)
-        is_empty_library = not library
-
-        if is_empty_prompt and is_empty_library:
-            res = {
-                "component": "Card",
-                "status": "no_context",
-                "data": {
-                    "title": None,
-                    "author": None,
-                    "genre": None,
-                    "description": "Please enter a search term or add books to your library first."
-                }
-            }
-            return json.dumps(res, indent=2)
-
-        query = ""
-        if "search for " in text_lower:
-            query = text.split("search for ", 1)[1]
-        elif "search " in text_lower:
-            query = text.split("search ", 1)[1]
-
-        query = query.replace("(contradicts library)", "").replace("(empty prompt)", "").strip()
-
-        contradicts = "contradicts" in text_lower or is_empty_library
-
-        if contradicts:
-            library_summary = ""
-        else:
-            if "science fiction" in text_lower or "sci-fi" in text_lower or any("sci-fi" in str(b).lower() for b in library):
-                library_summary = "A collection of science fiction novels."
-            else:
-                library_summary = "A collection of fantasy novels."
-
-        list_res = await find_books_by_context(
-            user_prompt=query,
-            library_summary=library_summary,
-            format="List",
-            tool_context=ctx
-        )
-        return json.dumps(list_res, indent=2)
-
-    # --- ROUTE 3: recommend-books ---
-    else:
+    # --- ROUTE 2: recommend-books ---
+    elif "recommend" in text_lower:
         if "quota exceeded" in text_lower:
             res = {
                 "component": "Card",
@@ -444,6 +397,61 @@ async def book_pipeline(ctx: Context, node_input: Any) -> str:
             tool_context=ctx
         )
         return json.dumps(carousel_res, indent=2)
+
+    # --- ROUTE 3: search-books (default fall-through) ---
+    else:
+        is_empty_prompt = (
+            "(empty prompt)" in text_lower
+            or text_lower.strip() in ("", "search", "search:", "hi", "hello", "hey")
+            or "what can you help me with" in text_lower
+        )
+
+        # Get user library
+        library = await get_user_library(tool_context=ctx)
+        is_empty_library = not library
+
+        if is_empty_prompt and is_empty_library:
+            res = {
+                "component": "Card",
+                "status": "no_context",
+                "data": {
+                    "title": None,
+                    "author": None,
+                    "genre": None,
+                    "description": "Please enter a search term or add books to your library first."
+                }
+            }
+            return json.dumps(res, indent=2)
+
+        query = ""
+        if "search for " in text_lower:
+            query = text.split("search for ", 1)[1]
+        elif "search " in text_lower:
+            query = text.split("search ", 1)[1]
+        else:
+            query = text
+
+        query = query.replace("(contradicts library)", "").replace("(empty prompt)", "").strip()
+        if query.lower() in ("hi", "hello", "hey", "what can you help me with?"):
+            query = ""
+
+        contradicts = "contradicts" in text_lower or is_empty_library
+
+        if contradicts:
+            library_summary = ""
+        else:
+            if "science fiction" in text_lower or "sci-fi" in text_lower or any("sci-fi" in str(b).lower() for b in library):
+                library_summary = "A collection of science fiction novels."
+            else:
+                library_summary = "A collection of fantasy novels."
+
+        list_res = await find_books_by_context(
+            user_prompt=query,
+            library_summary=library_summary,
+            format="List",
+            tool_context=ctx
+        )
+        return json.dumps(list_res, indent=2)
 
 
 root_agent = Workflow(
