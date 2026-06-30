@@ -73,16 +73,19 @@ def web_search_header_provider(readonly_context) -> dict[str, str]:
 
 
 # Define remote MCP toolsets using Server-Sent Events (SSE)
+DB_MCP_URL = os.environ.get("DB_MCP_URL", "http://127.0.0.1:8001/sse")
+SEARCH_MCP_URL = os.environ.get("SEARCH_MCP_URL", "http://127.0.0.1:8002/sse")
+
 db_mcp_toolset = McpToolset(
     connection_params=SseConnectionParams(
-        url="https://gcp-postgres-mcp-service.a.run.app/sse"
+        url=DB_MCP_URL
     ),
     header_provider=library_db_header_provider,
 )
 
 search_mcp_toolset = McpToolset(
     connection_params=SseConnectionParams(
-        url="https://custom-search-mcp-service.a.run.app/sse"
+        url=SEARCH_MCP_URL
     ),
     header_provider=web_search_header_provider,
 )
