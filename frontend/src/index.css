@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-950 text-slate-100 min-h-screen overflow-x-hidden font-sans;
+  }
+}
+
+/* Custom 3D Book perspective styles */
+.bookshelf-perspective {
+  perspective: 1000px;
+}
+
+.book-spine-3d {
+  transform-style: preserve-3d;
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.book-spine-3d:hover {
+  transform: translateZ(20px) rotateY(-5deg);
+}
+
+/* Custom wooden shelf styling */
+.wooden-shelf {
+  background: linear-gradient(to bottom, #8b5a2b, #5c3a21);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3), inset 0 2px 2px rgba(255, 255, 255, 0.1);
+}
