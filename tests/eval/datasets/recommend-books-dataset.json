@@ -6,20 +6,13 @@
         "role": "user",
         "parts": [
           {
-            "text": "Give me some recommendations based on my reading history. I want dark fantasy."
+            "text": "What to read next from my shelf?"
           }
         ]
       },
       "expected_tool_calls": [
         {
           "name": "get_user_library"
-        },
-        {
-          "name": "find_books_by_context",
-          "args": {
-            "user_prompt": "I want dark fantasy",
-            "library_summary": "A collection of dark and epic fantasy novels."
-          }
         }
       ],
       "reference": {
@@ -27,7 +20,7 @@
           "role": "model",
           "parts": [
             {
-              "text": "{\n  \"component\": \"Carousel\",\n  \"status\": \"success\",\n  \"items\": [\n    {\n      \"component\": \"Card\",\n      \"status\": \"success\",\n      \"data\": {\n        \"title\": \"The Way of Kings\",\n        \"author\": \"Brandon Sanderson\",\n        \"genre\": \"Epic Fantasy\",\n        \"description\": \"An epic fantasy novel...\"\n      }\n    }\n  ]\n}"
+              "text": "{\n  \"status\": \"success\",\n  \"items\": [\n    {\n      \"title\": \"Dune\",\n      \"author\": \"Frank Herbert\",\n      \"genre\": \"Sci-Fi\",\n      \"description\": \"A classic science fiction novel.\"\n    }\n  ]\n}"
             }
           ]
         }
@@ -39,7 +32,7 @@
         "role": "user",
         "parts": [
           {
-            "text": "Recommend some books for me."
+            "text": "What to read next from my shelf? (empty library)"
           }
         ]
       },
@@ -53,7 +46,7 @@
           "role": "model",
           "parts": [
             {
-              "text": "{\n  \"component\": \"Carousel\",\n  \"status\": \"empty_library\",\n  \"items\": [\n    {\n      \"component\": \"Card\",\n      \"status\": \"success\",\n      \"data\": {\n        \"title\": \"To Kill a Mockingbird\",\n        \"author\": \"Harper Lee\",\n        \"genre\": \"Classic Fiction\",\n        \"description\": \"A masterpiece of modern American literature exploring themes of race, class, and justice.\"\n      }\n    },\n    {\n      \"component\": \"Card\",\n      \"status\": \"success\",\n      \"data\": {\n        \"title\": \"1984\",\n        \"author\": \"George Orwell\",\n        \"genre\": \"Dystopian Fiction\",\n        \"description\": \"A classic novel depicting a dystopian future under constant government surveillance.\"\n      }\n    },\n    {\n      \"component\": \"Card\",\n      \"status\": \"success\",\n      \"data\": {\n        \"title\": \"The Great Gatsby\",\n        \"author\": \"F. Scott Fitzgerald\",\n        \"genre\": \"Classic Fiction\",\n        \"description\": \"A novel set in the jazz age exploring themes of wealth, love, and the American Dream.\"\n      }\n    }\n  ]\n}"
+              "text": "{\n  \"status\": \"empty_library\",\n  \"items\": []\n}"
             }
           ]
         }
@@ -65,7 +58,7 @@
         "role": "user",
         "parts": [
           {
-            "text": "Recommend some books (quota exceeded)"
+            "text": "What to read next from my shelf? (quota exceeded)"
           }
         ]
       },
@@ -75,7 +68,7 @@
           "role": "model",
           "parts": [
             {
-              "text": "{\n  \"component\": \"Card\",\n  \"status\": \"quota_exceeded\",\n  \"data\": {\n    \"title\": null,\n    \"author\": null,\n    \"genre\": null,\n    \"description\": \"Daily recommendation limit reached. Please try again tomorrow.\"\n  }\n}"
+              "text": "{\n  \"status\": \"quota_exceeded\",\n  \"items\": []\n}"
             }
           ]
         }

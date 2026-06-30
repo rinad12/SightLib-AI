@@ -19,15 +19,6 @@
       "expected_tool_calls": [
         {
           "name": "find_books_by_context"
-        },
-        {
-          "name": "save_book",
-          "args": {
-            "title": "The Hobbit",
-            "author": "J.R.R. Tolkien",
-            "genre": "Fantasy",
-            "description": "A classic high-fantasy novel..."
-          }
         }
       ],
       "reference": {
@@ -35,7 +26,7 @@
           "role": "model",
           "parts": [
             {
-              "text": "{\n  \"component\": \"Card\",\n  \"status\": \"success\",\n  \"data\": {\n    \"title\": \"The Hobbit\",\n    \"author\": \"J.R.R. Tolkien\",\n    \"genre\": \"Fantasy\",\n    \"description\": \"A classic high-fantasy novel...\"\n  }\n}"
+              "text": "{\n  \"status\": \"success\",\n  \"draft_data\": {\n    \"title\": \"The Hobbit\",\n    \"author\": \"J.R.R. Tolkien\",\n    \"genre\": \"Fantasy\",\n    \"description\": \"A classic high-fantasy novel...\"\n  }\n}"
             }
           ]
         }
@@ -63,7 +54,7 @@
           "role": "model",
           "parts": [
             {
-              "text": "{\n  \"component\": \"Card\",\n  \"status\": \"manual_input_required\",\n  \"data\": {\n    \"title\": null,\n    \"author\": null,\n    \"genre\": null,\n    \"description\": null\n  }\n}"
+              "text": "{\n  \"status\": \"manual_input_required\",\n  \"draft_data\": {\n    \"title\": null,\n    \"author\": null,\n    \"genre\": null,\n    \"description\": null\n  }\n}"
             }
           ]
         }
@@ -87,13 +78,7 @@
       },
       "expected_tool_calls": [
         {
-          "name": "save_book",
-          "args": {
-            "title": "Unknown Masterpiece",
-            "author": "John Doe",
-            "genre": null,
-            "description": null
-          }
+          "name": "find_books_by_context"
         }
       ],
       "reference": {
@@ -101,7 +86,7 @@
           "role": "model",
           "parts": [
             {
-              "text": "{\n  \"component\": \"Card\",\n  \"status\": \"partial_data\",\n  \"data\": {\n    \"title\": \"Unknown Masterpiece\",\n    \"author\": \"John Doe\",\n    \"genre\": null,\n    \"description\": null\n  }\n}"
+              "text": "{\n  \"status\": \"success\",\n  \"draft_data\": {\n    \"title\": \"Unknown Masterpiece\",\n    \"author\": \"John Doe\",\n    \"genre\": null,\n    \"description\": null\n  }\n}"
             }
           ]
         }

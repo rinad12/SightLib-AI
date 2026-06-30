@@ -158,20 +158,15 @@ async def save_book(
 async def find_books_by_context(
     user_prompt: str | None = None,
     library_summary: str | None = None,
-    format: str = "Carousel",
     tool_context: Context = None
-) -> dict:
+) -> list:
     """Searches for book recommendations based on user prompt and reading history.
 
     Args:
         user_prompt: Optional user preference prompt.
         library_summary: Summary of user's reading history.
-        format: Output component format ("Carousel" or "List").
         tool_context: The execution context.
     """
-    items = []
-    status = "success"
-
     try:
         args = {
             "user_prompt": user_prompt or "",
@@ -191,30 +186,19 @@ async def find_books_by_context(
         elif isinstance(res, list):
             raw_books = res
 
+        books = []
         for book in raw_books:
             if isinstance(book, dict):
-                book_data = {
+                books.append({
                     "title": book.get("title"),
                     "author": book.get("author"),
                     "genre": book.get("genre"),
                     "description": book.get("description")
-                }
-                if format == "List":
-                    items.append(book_data)
-                else:
-                    items.append({
-                        "component": "Card",
-                        "status": "success",
-                        "data": book_data
-                    })
+                })
+        return books
     except Exception as e:
         logger.exception("Failed to find books by context")
-
-    return {
-        "component": format,
-        "status": status,
-        "items": items
-    }
+        return []
 
 
 class OCRResult(BaseModel):
@@ -272,9 +256,8 @@ async def book_pipeline(ctx: Context, node_input: Any) -> str:
     if has_image or "process" in text_lower or "photo" in text_lower:
         if "(blurry)" in text_lower:
             res = {
-                "component": "Card",
                 "status": "manual_input_required",
-                "data": {
+                "draft_data": {
                     "title": None,
                     "author": None,
                     "genre": None,
@@ -290,9 +273,8 @@ async def book_pipeline(ctx: Context, node_input: Any) -> str:
 
         if not title:
             res = {
-                "component": "Card",
                 "status": "manual_input_required",
-                "data": {
+                "draft_data": {
                     "title": None,
                     "author": None,
                     "genre": None,
@@ -308,95 +290,50 @@ async def book_pipeline(ctx: Context, node_input: Any) -> str:
             search_res = await find_books_by_context(
                 user_prompt=f"{title} by {author}",
                 library_summary="",
-                format="Carousel",
                 tool_context=ctx
             )
-            items = search_res.get("items", [])
-            if items:
-                first_book = items[0].get("data", {})
+            if search_res:
+                first_book = search_res[0]
                 genre = first_book.get("genre")
                 description = first_book.get("description")
         except Exception:
             pass
 
-        # DB Step (Node D)
-        card = await save_book(
-            title=title,
-            author=author,
-            genre=genre,
-            description=description,
-            tool_context=ctx
-        )
-        return json.dumps(card, indent=2)
+        # Return draft data to React UI (DO NOT SAVE TO DB)
+        res = {
+            "status": "success",
+            "draft_data": {
+                "title": title,
+                "author": author,
+                "genre": genre,
+                "description": description
+            }
+        }
+        return json.dumps(res, indent=2)
 
     # --- ROUTE 2: recommend-books ---
     elif "recom" in text_lower:
         if "quota exceeded" in text_lower:
             res = {
-                "component": "Card",
                 "status": "quota_exceeded",
-                "data": {
-                    "title": None,
-                    "author": None,
-                    "genre": None,
-                    "description": "Daily recommendation limit reached. Please try again tomorrow."
-                }
+                "items": []
             }
             return json.dumps(res, indent=2)
 
         library = await get_user_library(tool_context=ctx)
         if not library:
             res = {
-                "component": "Carousel",
                 "status": "empty_library",
-                "items": [
-                    {
-                        "component": "Card",
-                        "status": "success",
-                        "data": {
-                            "title": "To Kill a Mockingbird",
-                            "author": "Harper Lee",
-                            "genre": "Classic Fiction",
-                            "description": "A masterpiece of modern American literature exploring themes of race, class, and justice."
-                        }
-                    },
-                    {
-                        "component": "Card",
-                        "status": "success",
-                        "data": {
-                            "title": "1984",
-                            "author": "George Orwell",
-                            "genre": "Dystopian Fiction",
-                            "description": "A classic novel depicting a dystopian future under constant government surveillance."
-                        }
-                    },
-                    {
-                        "component": "Card",
-                        "status": "success",
-                        "data": {
-                            "title": "The Great Gatsby",
-                            "author": "F. Scott Fitzgerald",
-                            "genre": "Classic Fiction",
-                            "description": "A novel set in the jazz age exploring themes of wealth, love, and the American Dream."
-                        }
-                    }
-                ]
+                "items": []
             }
             return json.dumps(res, indent=2)
 
-        library_summary = "A collection of dark and epic fantasy novels."
-
-        pref = text
-        if "based on my reading history" in text_lower:
-            pref = text.split("based on my reading history.", 1)[-1].strip()
-
-        carousel_res = await find_books_by_context(
-            user_prompt=pref,
-            library_summary=library_summary,
-            format="Carousel",
-            tool_context=ctx
-        )
-        return json.dumps(carousel_res, indent=2)
+        # Returns books already in the user's library
+        res = {
+            "status": "success",
+            "items": library
+        }
+        return json.dumps(res, indent=2)
 
     # --- ROUTE 3: search-books (default fall-through) ---
     else:
@@ -412,14 +349,8 @@ async def book_pipeline(ctx: Context, node_input: Any) -> str:
 
         if is_empty_prompt and is_empty_library:
             res = {
-                "component": "Card",
-                "status": "no_context",
-                "data": {
-                    "title": None,
-                    "author": None,
-                    "genre": None,
-                    "description": "Please enter a search term or add books to your library first."
-                }
+                "status": "missing_context",
+                "items": []
             }
             return json.dumps(res, indent=2)
 
@@ -448,10 +379,14 @@ async def book_pipeline(ctx: Context, node_input: Any) -> str:
         list_res = await find_books_by_context(
             user_prompt=query,
             library_summary=library_summary,
-            format="List",
             tool_context=ctx
         )
-        return json.dumps(list_res, indent=2)
+
+        res = {
+            "status": "success",
+            "items": list_res
+        }
+        return json.dumps(res, indent=2)
 
 
 root_agent = Workflow(

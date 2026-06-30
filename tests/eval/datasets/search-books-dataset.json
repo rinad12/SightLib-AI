@@ -27,7 +27,7 @@
           "role": "model",
           "parts": [
             {
-              "text": "{\n  \"component\": \"List\",\n  \"status\": \"success\",\n  \"items\": [\n    {\n      \"title\": \"The Way of Kings\",\n      \"author\": \"Brandon Sanderson\",\n      \"genre\": \"Epic Fantasy\",\n      \"description\": \"An epic fantasy novel...\"\n    }\n  ]\n}"
+              "text": "{\n  \"status\": \"success\",\n  \"items\": [\n    {\n      \"title\": \"The Way of Kings\",\n      \"author\": \"Brandon Sanderson\",\n      \"genre\": \"Epic Fantasy\",\n      \"description\": \"An epic fantasy novel...\"\n    }\n  ]\n}"
             }
           ]
         }
@@ -60,7 +60,7 @@
           "role": "model",
           "parts": [
             {
-              "text": "{\n  \"component\": \"List\",\n  \"status\": \"success\",\n  \"items\": [\n    {\n      \"title\": \"The Joy of Cooking\",\n      \"author\": \"Irma S. Rombauer\",\n      \"genre\": \"Cooking\",\n      \"description\": \"A classic cookbook...\"\n    }\n  ]\n}"
+              "text": "{\n  \"status\": \"success\",\n  \"items\": [\n    {\n      \"title\": \"The Joy of Cooking\",\n      \"author\": \"Irma S. Rombauer\",\n      \"genre\": \"Cooking\",\n      \"description\": \"A classic cookbook...\"\n    }\n  ]\n}"
             }
           ]
         }
@@ -93,7 +93,7 @@
           "role": "model",
           "parts": [
             {
-              "text": "{\n  \"component\": \"List\",\n  \"status\": \"success\",\n  \"items\": [\n    {\n      \"title\": \"Foundation\",\n      \"author\": \"Isaac Asimov\",\n      \"genre\": \"Sci-Fi\",\n      \"description\": \"A classic science fiction novel...\"\n    }\n  ]\n}"
+              "text": "{\n  \"status\": \"success\",\n  \"items\": [\n    {\n      \"title\": \"Foundation\",\n      \"author\": \"Isaac Asimov\",\n      \"genre\": \"Sci-Fi\",\n      \"description\": \"A classic science fiction novel...\"\n    }\n  ]\n}"
             }
           ]
         }
@@ -119,7 +119,7 @@
           "role": "model",
           "parts": [
             {
-              "text": "{\n  \"component\": \"Card\",\n  \"status\": \"no_context\",\n  \"data\": {\n    \"title\": null,\n    \"author\": null,\n    \"genre\": null,\n    \"description\": \"Please enter a search term or add books to your library first.\"\n  }\n}"
+              "text": "{\n  \"status\": \"missing_context\",\n  \"items\": []\n}"
             }
           ]
         }
