@@ -101,6 +101,69 @@ async def _call_mcp_tool(toolset: McpToolset, tool_name: str, args: dict, tool_c
     return await tool.run_async(args=args, tool_context=tool_context)
 
 
+def _parse_mcp_result(res: Any) -> Any:
+    """Safely extracts and parses JSON/text from an MCP tool call result."""
+    if not res:
+        return res
+
+    # 1. If it has a 'result' key, extract it (for backwards compatibility)
+    if isinstance(res, dict) and "result" in res:
+        res = res["result"]
+
+    # 2. If it's a CallToolResult object (having 'content' attribute)
+    if hasattr(res, "content") and isinstance(res.content, list):
+        for item in res.content:
+            if hasattr(item, "text") and item.text:
+                try:
+                    return json.loads(item.text)
+                except Exception:
+                    return item.text
+            elif isinstance(item, dict) and item.get("text"):
+                try:
+                    return json.loads(item["text"])
+                except Exception:
+                    return item["text"]
+
+    # 3. If it's a dict with 'content' list
+    if isinstance(res, dict) and "content" in res and isinstance(res["content"], list):
+        for item in res["content"]:
+            if isinstance(item, dict) and item.get("text"):
+                try:
+                    return json.loads(item["text"])
+                except Exception:
+                    return item["text"]
+            elif hasattr(item, "text") and item.text:
+                try:
+                    return json.loads(item.text)
+                except Exception:
+                    return item.text
+
+    # 4. If it's a list (already parsed or raw content list)
+    if isinstance(res, list):
+        if len(res) > 0:
+            first = res[0]
+            if hasattr(first, "text") and first.text:
+                try:
+                    return json.loads(first.text)
+                except Exception:
+                    return first.text
+            elif isinstance(first, dict) and first.get("text"):
+                try:
+                    return json.loads(first["text"])
+                except Exception:
+                    return first["text"]
+        return res
+
+    # 5. If it's a string, try loading it as JSON
+    if isinstance(res, str):
+        try:
+            return json.loads(res)
+        except Exception:
+            return res
+
+    return res
+
+
 async def get_user_library(tool_context: Context) -> list:
     """Retrieves the list of books in the current user's library.
 
@@ -109,9 +172,10 @@ async def get_user_library(tool_context: Context) -> list:
     """
     try:
         res = await _call_mcp_tool(db_mcp_toolset, "get_user_library", {}, tool_context)
-        if isinstance(res, dict) and "result" in res:
-            return res["result"]
-        return res
+        parsed = _parse_mcp_result(res)
+        if isinstance(parsed, list):
+            return parsed
+        return []
     except Exception as e:
         logger.exception("Failed to get user library")
         return []
@@ -178,16 +242,9 @@ async def find_books_by_context(
         res = await _call_mcp_tool(search_mcp_toolset, "find_books_by_context", args, tool_context)
 
         raw_books = []
-        if isinstance(res, dict) and "result" in res:
-            res = res["result"]
-
-        if isinstance(res, str):
-            try:
-                raw_books = json.loads(res)
-            except Exception:
-                pass
-        elif isinstance(res, list):
-            raw_books = res
+        parsed = _parse_mcp_result(res)
+        if isinstance(parsed, list):
+            raw_books = parsed
 
         books = []
         for book in raw_books:

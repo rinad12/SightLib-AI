@@ -8,6 +8,9 @@ from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from mcp.types import Tool, TextContent
 import asyncpg
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("db_mcp_server")
@@ -153,6 +156,12 @@ async def call_tool(name: str, arguments: dict):
         await conn.close()
 
 
+from fastapi import Response
+
+class EmptyResponse(Response):
+    async def __call__(self, scope, receive, send):
+        pass
+
 sse = SseServerTransport("/mcp")
 
 
@@ -166,4 +175,5 @@ async def handle_sse(request: Request):
 @app.post("/mcp")
 async def handle_message(request: Request):
     request_headers.set(dict(request.headers))
-    return await sse.handle_post_message(request.scope, request.receive, request._send)
+    await sse.handle_post_message(request.scope, request.receive, request._send)
+    return EmptyResponse()

@@ -294,6 +294,9 @@ export default function App() {
             onChange={handlePhotoUpload} 
             accept="image/*" 
             className="hidden" 
+            id="book-cover-upload"
+            name="book-cover-upload"
+            aria-label="Upload book cover image"
           />
           
           <button
@@ -436,6 +439,9 @@ export default function App() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full bg-slate-950/80 border border-slate-800 rounded-xl py-2 px-3 pl-9 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-amber-500 transition duration-200"
+                  id="book-search-input"
+                  name="book-search"
+                  aria-label="Search or discover books"
                 />
                 <Search className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
               </div>
@@ -524,12 +530,16 @@ export default function App() {
       {/* Book Details Modal */}
       <AnimatePresence>
         {selectedBook && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 flex items-center justify-center p-4">
+          <div 
+            onClick={() => setSelectedBook(null)}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 flex items-center justify-center p-4 cursor-pointer"
+          >
             <motion.div
+              onClick={(e) => e.stopPropagation()}
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-slate-900 border border-slate-800 w-full max-w-lg rounded-3xl shadow-2xl p-6 relative overflow-hidden"
+              className="bg-slate-900 border border-slate-800 w-full max-w-lg rounded-3xl shadow-2xl p-6 relative overflow-hidden cursor-default"
             >
               {/* Cover background glow */}
               <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/10 rounded-full blur-2xl"></div>
@@ -540,8 +550,11 @@ export default function App() {
                   <p className="text-slate-400 font-semibold mt-1">by {selectedBook.author}</p>
                 </div>
                 <button 
+                  type="button"
+                  id="close-details-btn"
                   onClick={() => setSelectedBook(null)}
                   className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-xl transition duration-150"
+                  aria-label="Close details modal"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -592,12 +605,16 @@ export default function App() {
       {/* Edit Form Modal (HITL Draft & Manual Entry) */}
       <AnimatePresence>
         {showEditModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 flex items-center justify-center p-4">
+          <div 
+            onClick={() => setShowEditModal(false)}
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 flex items-center justify-center p-4 cursor-pointer"
+          >
             <motion.div
+              onClick={(e) => e.stopPropagation()}
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-3xl shadow-2xl p-6 relative"
+              className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-3xl shadow-2xl p-6 relative cursor-default"
             >
               <div className="flex justify-between items-center mb-6">
                 <div>
@@ -609,8 +626,11 @@ export default function App() {
                   </p>
                 </div>
                 <button 
+                  type="button"
+                  id="close-edit-btn"
                   onClick={() => setShowEditModal(false)}
                   className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 rounded-xl transition duration-150"
+                  aria-label="Close edit modal"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -618,10 +638,12 @@ export default function App() {
 
               <form onSubmit={handleSaveBook} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-mono uppercase text-slate-400 mb-1.5">Book Title</label>
+                  <label htmlFor="book-title-input" className="block text-xs font-mono uppercase text-slate-400 mb-1.5">Book Title</label>
                   <input
                     type="text"
                     required
+                    id="book-title-input"
+                    name="title"
                     value={editForm.title}
                     onChange={(e) => setEditForm(prev => ({ ...prev, title: e.target.value }))}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-sm text-slate-100 focus:outline-none focus:border-amber-500"
@@ -629,10 +651,12 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-mono uppercase text-slate-400 mb-1.5">Author</label>
+                  <label htmlFor="book-author-input" className="block text-xs font-mono uppercase text-slate-400 mb-1.5">Author</label>
                   <input
                     type="text"
                     required
+                    id="book-author-input"
+                    name="author"
                     value={editForm.author}
                     onChange={(e) => setEditForm(prev => ({ ...prev, author: e.target.value }))}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-sm text-slate-100 focus:outline-none focus:border-amber-500"
@@ -640,9 +664,11 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-mono uppercase text-slate-400 mb-1.5">Genre</label>
+                  <label htmlFor="book-genre-input" className="block text-xs font-mono uppercase text-slate-400 mb-1.5">Genre</label>
                   <input
                     type="text"
+                    id="book-genre-input"
+                    name="genre"
                     value={editForm.genre}
                     onChange={(e) => setEditForm(prev => ({ ...prev, genre: e.target.value }))}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-sm text-slate-100 focus:outline-none focus:border-amber-500"
@@ -650,9 +676,11 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-mono uppercase text-slate-400 mb-1.5">Description / Synopsis</label>
+                  <label htmlFor="book-description-input" className="block text-xs font-mono uppercase text-slate-400 mb-1.5">Description / Synopsis</label>
                   <textarea
                     rows={3}
+                    id="book-description-input"
+                    name="description"
                     value={editForm.description}
                     onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value }))}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-sm text-slate-100 focus:outline-none focus:border-amber-500 resize-none"
