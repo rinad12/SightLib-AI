@@ -227,24 +227,32 @@ export default function App() {
     setSearchResults([]);
     setQuotaStatus(null);
 
+    const promptText = searchQuery
+      ? `Recommend some books based on my shelf: ${searchQuery}`
+      : 'Recommend some books based on my shelf';
+
     try {
       const response = await fetch(`${API_BASE}/agent/run?user_id=${USER_ID}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: 'Recommend some books based on my shelf' })
+        body: JSON.stringify({ prompt: promptText })
       });
       const data = await response.json();
-      
+
       if (data.status === 'success' && data.items) {
-        // Map recommended titles to matching IDs in current library
+        // Shelf-only recommendation: map picked titles back to shelf book IDs to highlight.
         const ids = data.items.map(rec => {
-          const match = library.find(lib => lib.title.toLowerCase() === rec.title.toLowerCase());
+          const match = library.find(lib => lib.title.toLowerCase() === (rec.title || '').toLowerCase());
           return match ? match.id : null;
         }).filter(Boolean);
-        
+
         setRecommendedBookIds(ids);
         if (ids.length === 0) {
-          setQuotaStatus('No match found for recommended items on your shelves.');
+          setQuotaStatus(
+            searchQuery
+              ? `No book on your shelf matches "${searchQuery}". Try a different word, or use Discover New Books to search online.`
+              : 'No matching books found on your shelf.'
+          );
         }
       } else if (data.status === 'empty_library') {
         setQuotaStatus('Add some books to your shelf first to get shelf recommendations.');
@@ -327,6 +335,7 @@ export default function App() {
           <button
             onClick={handleGetRecommendations}
             disabled={agentRunning || library.length === 0}
+            title="Tip: type a preference (e.g. 'dark fantasy') in the Discover search box to narrow down what to read next"
             className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 border border-indigo-500/30 disabled:opacity-50 font-semibold rounded-xl transition duration-200 active:scale-95 shadow-md shadow-indigo-600/5"
           >
             <Sparkles className="w-5 h-5" />

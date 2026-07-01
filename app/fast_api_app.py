@@ -39,12 +39,13 @@ load_dotenv()
 
 import logging
 logger = logging.getLogger(__name__)
+cloud_logger = None
 
 try:
     setup_telemetry()
     _, project_id = google.auth.default()
     logging_client = google_cloud_logging.Client()
-    logger = logging_client.logger(__name__)
+    cloud_logger = logging_client.logger(__name__)
 except Exception as e:
     print(f"Skipping GCP telemetry setup (running in offline mode): {e}")
 allow_origins = (
@@ -293,7 +294,10 @@ def collect_feedback(feedback: Feedback) -> dict[str, str]:
     Returns:
         Success message
     """
-    logger.log_struct(feedback.model_dump(), severity="INFO")
+    if cloud_logger:
+        cloud_logger.log_struct(feedback.model_dump(), severity="INFO")
+    else:
+        logger.info("Feedback: %s", feedback.model_dump())
     return {"status": "success"}
 
 

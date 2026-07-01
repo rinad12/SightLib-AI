@@ -78,7 +78,7 @@ async def call_tool(name: str, arguments: dict):
     try:
         if name == "get_user_library":
             query = """
-                SELECT b.title, b.author, b.genre, b.description 
+                SELECT b.title, b.author, b.genre, b.description, ul.status
                 FROM books b
                 JOIN user_library ul ON b.id = ul.book_id
                 WHERE ul.user_id = $1::uuid
@@ -96,7 +96,8 @@ async def call_tool(name: str, arguments: dict):
                     "title": r["title"],
                     "author": r["author"],
                     "genre": r["genre"],
-                    "description": r["description"]
+                    "description": r["description"],
+                    "status": r["status"]
                 }
                 for r in rows
             ]

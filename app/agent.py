@@ -38,6 +38,7 @@ os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "True"
 
 import json
 import logging
+import random
 from typing import Any
 from google.adk.agents.context import Context
 from google.adk.agents.readonly_context import ReadonlyContext
@@ -288,6 +289,91 @@ If the image is blurry, unreadable, or doesn't show a book cover, return:
 )
 
 
+class RecommendedBook(BaseModel):
+    title: str
+    author: str | None = None
+    genre: str | None = None
+    description: str | None = None
+
+
+class RecommendationResult(BaseModel):
+    items: list[RecommendedBook] = []
+
+
+recommend_agent = Agent(
+    name="recommend_agent",
+    model=Gemini(
+        model="gemini-3.5-flash",
+        retry_options=types.HttpRetryOptions(attempts=3),
+    ),
+    instruction="""You are a reading assistant picking what the user should read next from books they ALREADY own.
+
+You will be given:
+- "shelf": a JSON array of the user's unread/in-progress shelf books (each with title, author, genre, description, status)
+- "reading_history": a JSON array of books the user has already finished, for inferring their taste
+- "user_preference": an optional description of the mood/genre/theme the user feels like reading right now
+
+Rules:
+- Only choose books from the given "shelf" list. Never invent a book and never suggest anything outside the shelf
+  — this is a shelf-only recommendation, not a search.
+- Copy the "title" field EXACTLY as given (same spelling/casing) for each book you pick.
+- If "user_preference" is given, judge it semantically (language, synonyms, mood, themes) against the genre/
+  description/title of each shelf book. If NONE of the shelf books genuinely fit the preference, return an empty
+  list — do not force a loose match just to return something.
+- If "user_preference" is empty/null, use "reading_history" instead: infer the genres/authors/themes the user
+  clearly enjoys from what they've already finished, and pick shelf books that best continue that taste.
+- Return between 0 and 5 books.
+
+Return JSON matching this schema:
+{
+  "items": [
+    {"title": "...", "author": "...", "genre": "...", "description": "..."}
+  ]
+}
+""",
+    output_schema=RecommendationResult,
+)
+
+
+class SearchBooksResult(BaseModel):
+    items: list[RecommendedBook] = []
+
+
+search_agent = Agent(
+    name="search_agent",
+    model=Gemini(
+        model="gemini-3.5-flash",
+        retry_options=types.HttpRetryOptions(attempts=3),
+    ),
+    tools=[search_mcp_toolset],
+    instruction="""You help a reader discover new books to read next.
+
+You will be given:
+- "query": what the user is looking for, in their own words (any language)
+- "library_summary": a short description of the kind of books already on their shelf, for context
+
+You have a tool, find_books_by_context, that searches Google Books (arguments: user_prompt, library_summary).
+Google Books' search is a literal keyword search, so:
+- Turn the user's request into good search keywords yourself before calling the tool (translate to English if
+  that gets better results, extract genre/theme/year instead of passing the whole sentence verbatim).
+- You may call the tool more than once with different phrasings if the first results look off-topic.
+- From the raw search results, KEEP only real, readable books (novels, story collections, well-known nonfiction)
+  that someone would actually want to read. DROP "Year's Best..." anthology omnibuses, academic essay collections,
+  literary criticism, library/auction catalogs, symposium proceedings, and anything that clearly isn't a
+  standalone book, unless the user explicitly asked for that kind of thing.
+- Return at most 8 books, best matches first. If nothing good is found, return an empty list.
+
+Return JSON matching this schema:
+{
+  "items": [
+    {"title": "...", "author": "...", "genre": "...", "description": "..."}
+  ]
+}
+""",
+    output_schema=SearchBooksResult,
+)
+
+
 @node(rerun_on_resume=True)
 async def book_pipeline(ctx: Context, node_input: Any) -> str:
     # 1. Parse input to get text and check if there's an image
@@ -328,8 +414,8 @@ async def book_pipeline(ctx: Context, node_input: Any) -> str:
 
         # Run OCR Agent Node (using Gemini 3.1 Pro)
         ocr_res = await ctx.run_node(ocr_agent, node_input)
-        title = ocr_res.extracted_title
-        author = ocr_res.extracted_author
+        title = ocr_res.get("extracted_title")
+        author = ocr_res.get("extracted_author")
 
         if not title:
             res = {
@@ -388,10 +474,59 @@ async def book_pipeline(ctx: Context, node_input: Any) -> str:
             }
             return json.dumps(res, indent=2)
 
-        # Returns books already in the user's library
+        # Recommend what to read next: books already on the shelf that
+        # haven't been finished yet, not the whole library regardless of status.
+        unread = [
+            book for book in library
+            if isinstance(book, dict) and book.get("status") != "read"
+        ]
+        if not unread:
+            res = {
+                "status": "empty_library",
+                "items": []
+            }
+            return json.dumps(res, indent=2)
+
+        # Books already finished, used to infer taste when no preference is given.
+        read_books = [
+            book for book in library
+            if isinstance(book, dict) and book.get("status") == "read"
+        ]
+
+        # Optional user preference, e.g. "Recommend some books based on my shelf: dark fantasy"
+        preference = ""
+        if ":" in text:
+            preference = text.split(":", 1)[1].strip()
+
+        if not preference and not read_books:
+            # Nothing to go on (no preference, nothing finished yet) - just pick something.
+            recommended = [random.choice(unread)]
+        else:
+            # Let the LLM pick which shelf books match the preference (semantically,
+            # across languages/synonyms), or - if no preference - infer taste from
+            # reading history, instead of literal substring matching. A legitimate
+            # empty result (nothing on the shelf fits the preference) is kept empty
+            # on purpose, so the frontend can tell the user nothing matched instead
+            # of silently falling back to the whole shelf.
+            try:
+                prompt = json.dumps({
+                    "shelf": unread,
+                    "reading_history": read_books,
+                    "user_preference": preference or None
+                }, indent=2)
+                rec_res = await ctx.run_node(recommend_agent, prompt)
+                recommended = rec_res.get("items") or []
+                if not recommended and not preference:
+                    # Empty prompt and the model couldn't infer anything from reading
+                    # history either - fall back to a random pick instead of "no match".
+                    recommended = [random.choice(unread)]
+            except Exception:
+                logger.exception("Failed to run recommend_agent")
+                recommended = unread  # technical failure only - not a "no match" result
+
         res = {
             "status": "success",
-            "items": library
+            "items": recommended
         }
         return json.dumps(res, indent=2)
 
@@ -416,9 +551,11 @@ async def book_pipeline(ctx: Context, node_input: Any) -> str:
 
         query = ""
         if "search for " in text_lower:
-            query = text.split("search for ", 1)[1]
+            idx = text_lower.index("search for ")
+            query = text[idx + len("search for "):]
         elif "search " in text_lower:
-            query = text.split("search ", 1)[1]
+            idx = text_lower.index("search ")
+            query = text[idx + len("search "):]
         else:
             query = text
 
@@ -431,16 +568,42 @@ async def book_pipeline(ctx: Context, node_input: Any) -> str:
         if contradicts:
             library_summary = ""
         else:
-            if "science fiction" in text_lower or "sci-fi" in text_lower or any("sci-fi" in str(b).lower() for b in library):
-                library_summary = "A collection of science fiction novels."
+            genres = sorted({
+                book.get("genre") for book in library
+                if isinstance(book, dict) and book.get("genre")
+            })
+            titles = [
+                book.get("title") for book in library
+                if isinstance(book, dict) and book.get("title")
+            ]
+            if genres or titles:
+                parts = []
+                if genres:
+                    parts.append(f"Genres on the shelf: {', '.join(genres)}.")
+                if titles:
+                    parts.append(f"Example titles already owned: {', '.join(titles[:10])}.")
+                library_summary = " ".join(parts)
             else:
-                library_summary = "A collection of fantasy novels."
+                library_summary = ""
 
-        list_res = await find_books_by_context(
-            user_prompt=query,
-            library_summary=library_summary,
-            tool_context=ctx
-        )
+        # Let the LLM turn the free-form query into good search keywords and
+        # filter out anthologies/catalogs/criticism, instead of passing the
+        # raw sentence straight to the Google Books keyword search.
+        list_res = []
+        try:
+            prompt = json.dumps({
+                "query": query,
+                "library_summary": library_summary
+            }, indent=2)
+            search_res = await ctx.run_node(search_agent, prompt)
+            list_res = search_res.get("items") or []
+        except Exception:
+            logger.exception("Failed to run search_agent")
+            list_res = await find_books_by_context(
+                user_prompt=query,
+                library_summary=library_summary,
+                tool_context=ctx
+            )
 
         res = {
             "status": "success",
