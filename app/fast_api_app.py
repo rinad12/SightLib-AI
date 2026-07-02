@@ -150,6 +150,11 @@ GOOGLE_OAUTH_CLIENT_ID = os.environ.get(
     "372551110403-ccfnb1119779oa6ugmsnbjkh780b0e9p.apps.googleusercontent.com",
 )
 
+# Temporary flag for demo recordings: lets visitors in without a Google account, so a screen
+# capture doesn't have to show a real login. Turn back off (unset or "false") afterwards -
+# see DEMO_MODE in .env.example.
+DEMO_MODE = os.environ.get("DEMO_MODE", "false").lower() == "true"
+
 # Database helper for REST API
 async def get_db_conn():
     return await asyncpg.connect(
@@ -196,6 +201,31 @@ async def ensure_schema(conn):
         ON usage_log (user_id, skill, created_at)
     """)
 
+    # Core catalog tables. CREATE TABLE IF NOT EXISTS is a no-op if they already exist
+    # (e.g. you created them by hand earlier) - this just lets a fresh clone/DB work
+    # out of the box without a separate manual migration step.
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS books (
+            id UUID PRIMARY KEY,
+            title VARCHAR(255) NOT NULL,
+            author VARCHAR(255) NOT NULL,
+            genre VARCHAR(100),
+            description TEXT
+        )
+    """)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_library (
+            id UUID PRIMARY KEY,
+            user_id UUID NOT NULL,
+            book_id UUID NOT NULL REFERENCES books(id),
+            status VARCHAR(50) NOT NULL DEFAULT 'unread',
+            added_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_user_library_user_id ON user_library (user_id)
+    """)
+
 
 async def ensure_user(conn, user_uuid: uuid.UUID, external_id: str | None = None, email: str | None = None):
     await conn.execute(
@@ -206,6 +236,12 @@ async def ensure_user(conn, user_uuid: uuid.UUID, external_id: str | None = None
         """,
         user_uuid, external_id, email
     )
+
+
+def is_demo_guest(user_id: str) -> bool:
+    """True for the throwaway accounts created by /api/auth/guest. Only meaningful while
+    DEMO_MODE is on - used to waive quotas for judges/reviewers trying the demo."""
+    return DEMO_MODE and user_id.startswith("guest-")
 
 
 async def check_and_record_usage(conn, user_uuid: uuid.UUID, skill: str, per_day: int, per_month: int | None = None) -> bool:
@@ -293,6 +329,36 @@ async def auth_google(req: GoogleLoginRequest, request: Request):
     request.session["user_id"] = google_sub
     request.session["email"] = email
     return {"status": "success", "email": email}
+
+
+@app.get("/api/config")
+async def get_config():
+    """Public, unauthenticated: tells the frontend which optional features are turned on."""
+    return {"demo_mode": DEMO_MODE}
+
+
+@app.post("/api/auth/guest")
+async def auth_guest(request: Request):
+    """Demo-only: logs the visitor in as a fresh, isolated guest account with no Google
+    sign-in required. Disabled unless DEMO_MODE=true."""
+    if not DEMO_MODE:
+        raise HTTPException(status_code=403, detail="Guest login is disabled")
+
+    guest_id = f"guest-{uuid.uuid4()}"
+    user_uuid = resolve_user_uuid(guest_id)
+
+    try:
+        conn = await get_db_conn()
+        try:
+            await ensure_user(conn, user_uuid, external_id=guest_id, email=None)
+        finally:
+            await conn.close()
+    except Exception as e:
+        return {"status": "error", "message": f"Database connection failed: {str(e)}"}
+
+    request.session["user_id"] = guest_id
+    request.session["email"] = "Guest"
+    return {"status": "success", "email": "Guest"}
 
 
 @app.get("/api/auth/me")
@@ -529,7 +595,9 @@ async def process_book_photo_api(req: ProcessBookPhotoRequest, request: Request)
         conn = await get_db_conn()
         try:
             await ensure_user(conn, user_uuid)
-            allowed = await check_and_record_usage(conn, user_uuid, "process-book-photo", per_day=3, per_month=10)
+            allowed = is_demo_guest(user_id) or await check_and_record_usage(
+                conn, user_uuid, "process-book-photo", per_day=3, per_month=10
+            )
         finally:
             await conn.close()
     except Exception as e:
@@ -552,7 +620,9 @@ async def search_books_api(req: SearchBooksRequest, request: Request):
         conn = await get_db_conn()
         try:
             await ensure_user(conn, user_uuid)
-            allowed = await check_and_record_usage(conn, user_uuid, "search-books", per_day=5)
+            allowed = is_demo_guest(user_id) or await check_and_record_usage(
+                conn, user_uuid, "search-books", per_day=5
+            )
         finally:
             await conn.close()
     except Exception as e:
@@ -573,7 +643,9 @@ async def recommend_books_api(req: RecommendBooksRequest, request: Request):
         conn = await get_db_conn()
         try:
             await ensure_user(conn, user_uuid)
-            allowed = await check_and_record_usage(conn, user_uuid, "recommend-books", per_day=5)
+            allowed = is_demo_guest(user_id) or await check_and_record_usage(
+                conn, user_uuid, "recommend-books", per_day=5
+            )
         finally:
             await conn.close()
     except Exception as e:

@@ -21,7 +21,7 @@ The backend operates purely as a reactive, headless execution environment. It ex
 * **Database Access Restriction:** The agent has zero raw SQL capabilities. The `library-db-mcp` is intentionally restricted to expose **exactly two specialized tools** (one for reading, one for writing), adhering strictly to the principle of least privilege. Both the agent (`get_user_library`) and the backend's own `/api/books` endpoint (`save_book`, via `call_db_mcp_tool`) go through this MCP layer rather than issuing raw SQL of their own.
 * **Usage Limits (Structural Gating via Policy Server):** Enforced server-side in `app/fast_api_app.py` (`check_and_record_usage`) before the LLM is ever invoked, backed by a `usage_log` table (bootstrapped idempotently at startup, see `ensure_schema`):
   * Photo Upload Pipeline (`process-book-photo`): Max 3 requests/day, 10 requests/month per user.
-  * Internet Book Search (Google Books API via `search-books`): Max 3 requests/day per user.
+  * Internet Book Search (Google Books API via `search-books`): Max 5 requests/day per user.
   * Recommendation Pipeline (`recommend-books`): Max 5 requests/day per user.
   * *Manual form submissions do not call the LLM and are completely unlimited.*
 

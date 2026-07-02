@@ -69,11 +69,16 @@ export default function App() {
   // Google Sign-In state
   const [authChecked, setAuthChecked] = useState(false);
   const [userEmail, setUserEmail] = useState(null);
+  const [demoMode, setDemoMode] = useState(false); // server-controlled: shows a no-login "guest" button for demo recordings
   const googleButtonRef = useRef(null);
 
   // Check for an existing session on mount; only load the library once authenticated
   useEffect(() => {
     checkAuth();
+    fetch(`${API_BASE}/config`)
+      .then((res) => res.json())
+      .then((data) => setDemoMode(!!data.demo_mode))
+      .catch((err) => console.error('Failed to load config:', err));
   }, []);
 
   const checkAuth = async () => {
@@ -98,7 +103,7 @@ export default function App() {
 
   // Render the Google Sign-In button once the script has loaded and we know we're logged out
   useEffect(() => {
-    if (authChecked && !userEmail && window.google && googleButtonRef.current) {
+    if (authChecked && !userEmail && !demoMode && window.google && googleButtonRef.current) {
       window.google.accounts.id.initialize({
         client_id: GOOGLE_CLIENT_ID,
         callback: handleGoogleCredential,
@@ -111,7 +116,19 @@ export default function App() {
         shape: 'pill',
       });
     }
-  }, [authChecked, userEmail]);
+  }, [authChecked, userEmail, demoMode]);
+
+  const handleGuestLogin = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/guest`, { method: 'POST', credentials: 'include' });
+      const data = await res.json();
+      if (data.status === 'success') {
+        setUserEmail(data.email);
+      }
+    } catch (err) {
+      console.error('Guest sign-in failed:', err);
+    }
+  };
 
   const handleGoogleCredential = async (response) => {
     try {
@@ -351,7 +368,7 @@ export default function App() {
       } else if (data.status === 'missing_context') {
         setQuotaStatus('No context. Enter a search term or add books to your shelf first.');
       } else if (data.status === 'quota_exceeded') {
-        setQuotaStatus('Search quota exceeded (Max 3 searches/day).');
+        setQuotaStatus('Search quota exceeded (Max 5 searches/day).');
       } else {
         // Covers status === 'error' and any other unexpected response - never fail silently.
         console.error('Search failed:', data);
@@ -450,9 +467,20 @@ export default function App() {
           <p className="text-sm text-amber-700/70 mt-1">your cozy little reading nook</p>
         </div>
         <p className="text-sm text-stone-500 max-w-sm leading-relaxed">
-          Sign in with Google to see your shelf and use the AI-powered features.
+          {demoMode
+            ? 'Try it out instantly - no account needed.'
+            : 'Sign in with Google to see your shelf and use the AI-powered features.'}
         </p>
-        <div ref={googleButtonRef}></div>
+        {demoMode ? (
+          <button
+            onClick={handleGuestLogin}
+            className="px-6 py-3 bg-amber-700 hover:bg-amber-800 text-white font-medium rounded-full shadow-md shadow-amber-900/20 transition-colors"
+          >
+            Try without signing in
+          </button>
+        ) : (
+          <div ref={googleButtonRef}></div>
+        )}
       </div>
     );
   }

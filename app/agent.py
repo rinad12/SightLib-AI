@@ -363,8 +363,14 @@ Return a JSON object matching this schema:
 
 Rules:
 - One entry per distinct book you can see, in the order they appear (e.g. left to right).
-- If a specific book's text is too blurry or partially hidden to read, still include an entry for it
-  with "extracted_title": null and "extracted_author": null - do not just drop it silently.
+- Read letter by letter. Never guess, invent, or auto-complete characters you cannot actually
+  resolve just to produce a plausible-looking word - a wrong-but-fluent-looking title is worse
+  than an honest gap. If part of a title/author is illegible (small, angled, blurry, glare,
+  partially hidden), transcribe only the part you are confident about and leave the rest out,
+  rather than inventing letters to fill the space.
+- If a specific book's text is too blurry or partially hidden to read AT ALL, still include an
+  entry for it with "extracted_title": null and "extracted_author": null - do not just drop it
+  silently.
 - If the image shows no books at all, or is entirely unreadable, return {"books": []}.
 """,
     output_schema=OCRResult,
