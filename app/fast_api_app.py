@@ -388,6 +388,81 @@ async def save_book_api(req: BookSaveRequest, request: Request):
         logger.exception("Failed to save book via library-db-mcp")
         return {"status": "error", "message": str(e)}
 
+
+@app.put("/api/books/{book_id}")
+async def update_book_api(book_id: str, req: BookSaveRequest, request: Request):
+    """Direct DB edit for a book already on the user's shelf. Intentionally NOT an
+    MCP tool and NOT reachable through the agent - the LLM has no way to trigger this."""
+    user_id = require_session_user_id(request)
+    user_uuid = resolve_user_uuid(user_id)
+
+    try:
+        book_uuid = uuid.UUID(book_id)
+    except ValueError:
+        return {"status": "error", "message": "Invalid book id"}
+
+    try:
+        conn = await get_db_conn()
+    except Exception as e:
+        return {"status": "error", "message": f"Database connection failed: {str(e)}"}
+
+    try:
+        owns = await conn.fetchval(
+            "SELECT 1 FROM user_library WHERE user_id = $1 AND book_id = $2",
+            user_uuid, book_uuid
+        )
+        if not owns:
+            return {"status": "error", "message": "Book not found on your shelf"}
+
+        await conn.execute(
+            "UPDATE books SET title = $1, author = $2, genre = $3, description = $4 WHERE id = $5",
+            req.title, req.author, req.genre or "", req.description or "", book_uuid
+        )
+        await conn.execute(
+            "UPDATE user_library SET status = $1 WHERE user_id = $2 AND book_id = $3",
+            req.status or "unread", user_uuid, book_uuid
+        )
+        return {"status": "success", "message": "Book updated"}
+    except Exception as e:
+        logger.exception("Failed to update book")
+        return {"status": "error", "message": str(e)}
+    finally:
+        await conn.close()
+
+
+@app.delete("/api/books/{book_id}")
+async def delete_book_api(book_id: str, request: Request):
+    """Removes a book from the current user's shelf (unlinks the user_library row,
+    doesn't touch the shared books catalog row). Same restriction as above: plain
+    authenticated REST mutation, no MCP tool, no agent access."""
+    user_id = require_session_user_id(request)
+    user_uuid = resolve_user_uuid(user_id)
+
+    try:
+        book_uuid = uuid.UUID(book_id)
+    except ValueError:
+        return {"status": "error", "message": "Invalid book id"}
+
+    try:
+        conn = await get_db_conn()
+    except Exception as e:
+        return {"status": "error", "message": f"Database connection failed: {str(e)}"}
+
+    try:
+        result = await conn.execute(
+            "DELETE FROM user_library WHERE user_id = $1 AND book_id = $2",
+            user_uuid, book_uuid
+        )
+        if result == "DELETE 0":
+            return {"status": "error", "message": "Book not found on your shelf"}
+        return {"status": "success", "message": "Book removed from shelf"}
+    except Exception as e:
+        logger.exception("Failed to delete book")
+        return {"status": "error", "message": str(e)}
+    finally:
+        await conn.close()
+
+
 async def run_agent_pipeline(user_id: str, text: str, image_bytes: Optional[str] = None) -> dict:
     """Shared runner invocation used by the three dedicated skill endpoints below."""
     runner = app.state.runner
@@ -463,7 +538,7 @@ async def process_book_photo_api(req: ProcessBookPhotoRequest, request: Request)
     if not allowed:
         return {
             "status": "quota_exceeded",
-            "draft_data": {"title": None, "author": None, "genre": None, "description": None}
+            "items": []
         }
 
     return await run_agent_pipeline(user_id, "Process this book cover photo", image_bytes=req.image_bytes)
@@ -477,7 +552,7 @@ async def search_books_api(req: SearchBooksRequest, request: Request):
         conn = await get_db_conn()
         try:
             await ensure_user(conn, user_uuid)
-            allowed = await check_and_record_usage(conn, user_uuid, "search-books", per_day=3)
+            allowed = await check_and_record_usage(conn, user_uuid, "search-books", per_day=5)
         finally:
             await conn.close()
     except Exception as e:

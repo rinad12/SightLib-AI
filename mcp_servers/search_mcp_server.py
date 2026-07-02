@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import logging
@@ -58,13 +59,29 @@ async def call_tool(name: str, arguments: dict):
         params["key"] = api_key
 
     books = []
+    max_attempts = 3
     try:
         async with httpx.AsyncClient() as client:
-            resp = await client.get(url, params=params)
-            resp.raise_for_status()
-            data = resp.json()
+            data = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    resp = await client.get(url, params=params)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    break
+                except httpx.HTTPStatusError as e:
+                    # Retry on transient server-side errors (e.g. 503), not on 4xx (bad key/query).
+                    if e.response.status_code < 500 or attempt == max_attempts:
+                        raise
+                    logger.warning(f"Google Books API returned {e.response.status_code}, retrying ({attempt}/{max_attempts})")
+                    await asyncio.sleep(0.5 * attempt)
+                except httpx.RequestError:
+                    if attempt == max_attempts:
+                        raise
+                    logger.warning(f"Google Books API request failed, retrying ({attempt}/{max_attempts})")
+                    await asyncio.sleep(0.5 * attempt)
 
-            for item in data.get("items", []):
+            for item in (data or {}).get("items", []):
                 volume_info = item.get("volumeInfo", {})
                 title = volume_info.get("title")
                 authors = ", ".join(volume_info.get("authors", [])) or "Unknown Author"
@@ -75,7 +92,9 @@ async def call_tool(name: str, arguments: dict):
                     "title": title,
                     "author": authors,
                     "genre": categories,
-                    "description": description[:300] + "..." if len(description) > 300 else description
+                    # Full description, untruncated - callers (LLM agents) are responsible for
+                    # writing an appropriately sized synopsis instead of a blind character cut.
+                    "description": description
                 })
     except Exception as e:
         logger.exception("Error querying Google Books API")
