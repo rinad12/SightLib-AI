@@ -16,8 +16,8 @@ import {
   BookMarked
 } from 'lucide-react';
 
-const API_BASE = 'http://127.0.0.1:8000/api'; // Connects to the local runner/playground backend
-const USER_ID = 'default-user';
+const API_BASE = '/api'; // Proxied to the backend by Vite (see vite.config.js) so cookies stay same-origin
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
 // Color palette for the skeuomorphic book spines
 const SPINE_COLORS = [
@@ -53,15 +53,85 @@ export default function App() {
   const [scanningImage, setScanningImage] = useState(null);
   const fileInputRef = useRef(null);
 
-  // Fetch user library on mount
+  // Google Sign-In state
+  const [authChecked, setAuthChecked] = useState(false);
+  const [userEmail, setUserEmail] = useState(null);
+  const googleButtonRef = useRef(null);
+
+  // Check for an existing session on mount; only load the library once authenticated
   useEffect(() => {
-    fetchLibrary();
+    checkAuth();
   }, []);
+
+  const checkAuth = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/me`, { credentials: 'include' });
+      const data = await res.json();
+      if (data.authenticated) {
+        setUserEmail(data.email);
+      }
+    } catch (err) {
+      console.error('Failed to check auth session:', err);
+    } finally {
+      setAuthChecked(true);
+    }
+  };
+
+  useEffect(() => {
+    if (userEmail) {
+      fetchLibrary();
+    }
+  }, [userEmail]);
+
+  // Render the Google Sign-In button once the script has loaded and we know we're logged out
+  useEffect(() => {
+    if (authChecked && !userEmail && window.google && googleButtonRef.current) {
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: handleGoogleCredential,
+        // FedCM can misbehave on non-HTTPS local dev origins; fall back to the classic prompt/button flow.
+        use_fedcm_for_prompt: false,
+      });
+      window.google.accounts.id.renderButton(googleButtonRef.current, {
+        theme: 'filled_black',
+        size: 'large',
+        shape: 'pill',
+      });
+    }
+  }, [authChecked, userEmail]);
+
+  const handleGoogleCredential = async (response) => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/google`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id_token: response.credential }),
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        setUserEmail(data.email);
+      }
+    } catch (err) {
+      console.error('Google sign-in failed:', err);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch(`${API_BASE}/auth/logout`, { method: 'POST', credentials: 'include' });
+    } catch (err) {
+      console.error('Logout failed:', err);
+    } finally {
+      setUserEmail(null);
+      setLibrary([]);
+    }
+  };
 
   const fetchLibrary = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/library?user_id=${USER_ID}`);
+      const res = await fetch(`${API_BASE}/library`, { credentials: 'include' });
       const data = await res.json();
       if (data.status === 'success') {
         setLibrary(data.items || []);
@@ -87,11 +157,11 @@ export default function App() {
       setRecommendedBookIds([]); // Clear recommendations
 
       try {
-        const response = await fetch(`${API_BASE}/agent/run?user_id=${USER_ID}`, {
+        const response = await fetch(`${API_BASE}/process-book-photo`, {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            prompt: 'Process this book cover photo',
             image_bytes: base64
           })
         });
@@ -135,8 +205,9 @@ export default function App() {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/books?user_id=${USER_ID}`, {
+      const res = await fetch(`${API_BASE}/books`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editForm)
       });
@@ -157,8 +228,9 @@ export default function App() {
     if (!selectedBook) return;
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/books?user_id=${USER_ID}`, {
+      const res = await fetch(`${API_BASE}/books`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: selectedBook.title,
@@ -196,16 +268,15 @@ export default function App() {
     setRecommendedBookIds([]);
     setQuotaStatus(null);
 
-    const promptText = query ? `Search for ${query}` : 'Search (empty prompt)';
-
     try {
-      const response = await fetch(`${API_BASE}/agent/run?user_id=${USER_ID}`, {
+      const response = await fetch(`${API_BASE}/search-books`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: promptText })
+        body: JSON.stringify({ query: query || null })
       });
       const data = await response.json();
-      
+
       if (data.status === 'success' && data.items) {
         setSearchResults(data.items);
       } else if (data.status === 'missing_context') {
@@ -227,15 +298,12 @@ export default function App() {
     setSearchResults([]);
     setQuotaStatus(null);
 
-    const promptText = searchQuery
-      ? `Recommend some books based on my shelf: ${searchQuery}`
-      : 'Recommend some books based on my shelf';
-
     try {
-      const response = await fetch(`${API_BASE}/agent/run?user_id=${USER_ID}`, {
+      const response = await fetch(`${API_BASE}/recommend-books`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: promptText })
+        body: JSON.stringify({ preference: searchQuery || null })
       });
       const data = await response.json();
 
@@ -273,6 +341,31 @@ export default function App() {
     return library.slice(index * booksPerShelf, (index + 1) * booksPerShelf);
   });
 
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-amber-500 animate-spin" />
+      </div>
+    );
+  }
+
+  if (!userEmail) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-slate-900 via-slate-950 to-zinc-950 text-slate-100 flex flex-col items-center justify-center gap-6 px-6">
+        <div className="p-3 bg-amber-600/15 border border-amber-500/30 rounded-xl text-amber-500 shadow-lg shadow-amber-500/5">
+          <Layers className="w-10 h-10" />
+        </div>
+        <h1 className="text-3xl font-serif font-bold text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-amber-200 to-yellow-500">
+          GridShelf AI
+        </h1>
+        <p className="text-sm text-slate-400 font-mono text-center max-w-sm">
+          Sign in with Google to see your shelf and use the AI features.
+        </p>
+        <div ref={googleButtonRef}></div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-900 via-slate-950 to-zinc-950 text-slate-100 flex flex-col font-sans selection:bg-amber-600 selection:text-white pb-16">
       
@@ -292,6 +385,17 @@ export default function App() {
             </h1>
             <p className="text-xs text-slate-400 font-mono">Headless Agent & Skeuomorphic Library</p>
           </div>
+        </div>
+
+        <div className="flex items-center gap-2 text-xs text-slate-400 font-mono order-last md:order-none">
+          <User className="w-4 h-4" />
+          <span>{userEmail}</span>
+          <button
+            onClick={handleLogout}
+            className="ml-2 px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700/60 rounded-lg text-slate-300"
+          >
+            Sign out
+          </button>
         </div>
 
         {/* Global Control Buttons */}

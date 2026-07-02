@@ -19,18 +19,24 @@ from collections.abc import AsyncIterator
 import google.auth
 from a2a.server.tasks import InMemoryTaskStore
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 from google.adk.cli.fast_api import get_fast_api_app
 from google.adk.runners import Runner
 from google.cloud import logging as google_cloud_logging
+from google.auth.transport import requests as google_auth_requests
+from google.oauth2 import id_token as google_id_token
 
 from app.app_utils import services
 from app.app_utils.a2a import attach_a2a_routes
 from app.app_utils.telemetry import setup_telemetry
 from app.app_utils.typing import Feedback
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
+from datetime import datetime
+from mcp.client.sse import sse_client
+from mcp.client.session import ClientSession
 import asyncpg
 import json
 import uuid
@@ -56,6 +62,8 @@ allow_origins = (
         "http://localhost:8080",
         "http://127.0.0.1:5173",
         "http://localhost:5173",
+        "https://127.0.0.1:5173",
+        "https://localhost:5173",
     ]
 )
 
@@ -66,6 +74,15 @@ AGENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.agent import app as adk_app
     from app.agent import root_agent
+
+    try:
+        conn = await get_db_conn()
+        try:
+            await ensure_schema(conn)
+        finally:
+            await conn.close()
+    except Exception as e:
+        logger.warning(f"Could not bootstrap DB schema at startup (DB may be offline): {e}")
 
     runner = Runner(
         app=adk_app,
@@ -106,10 +123,31 @@ app.add_middleware(
         "http://localhost:8080",
         "http://127.0.0.1:5173",
         "http://localhost:5173",
+        "https://127.0.0.1:5173",
+        "https://localhost:5173",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Signs the session cookie issued after a verified Google login. Must be set to a
+# real secret in production - the dev fallback below is fine for local use only.
+# SameSite/Secure are also env-driven: locally the frontend is proxied same-origin
+# (see frontend/vite.config.js) so "lax"/non-secure is fine, but if frontend and
+# backend are deployed on different domains, set SESSION_COOKIE_SAMESITE=none and
+# SESSION_COOKIE_SECURE=true (Secure cookies require the backend itself to be HTTPS,
+# which Cloud Run provides by default).
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ.get("SESSION_SECRET_KEY", "dev-insecure-secret-change-me"),
+    same_site=os.environ.get("SESSION_COOKIE_SAMESITE", "lax"),
+    https_only=os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true",
+)
+
+GOOGLE_OAUTH_CLIENT_ID = os.environ.get(
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "372551110403-ccfnb1119779oa6ugmsnbjkh780b0e9p.apps.googleusercontent.com",
 )
 
 # Database helper for REST API
@@ -122,6 +160,155 @@ async def get_db_conn():
         port=os.environ.get("DB_PORT", "5432")
     )
 
+
+def resolve_user_uuid(user_id: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(user_id)
+    except ValueError:
+        return uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
+
+
+async def ensure_schema(conn):
+    """Idempotent bootstrap for tables that aren't part of the original hand-rolled schema.
+    Also migrates a `users` table that may already exist from an older, narrower schema
+    (CREATE TABLE IF NOT EXISTS alone won't add columns to a table that already exists)."""
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id UUID PRIMARY KEY,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """)
+    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS external_id VARCHAR(255)")
+    await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255)")
+    await conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external_id ON users (external_id)
+    """)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS usage_log (
+            id UUID PRIMARY KEY,
+            user_id UUID NOT NULL,
+            skill VARCHAR(50) NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """)
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_usage_log_user_skill_time
+        ON usage_log (user_id, skill, created_at)
+    """)
+
+
+async def ensure_user(conn, user_uuid: uuid.UUID, external_id: str | None = None, email: str | None = None):
+    await conn.execute(
+        """
+        INSERT INTO users (id, external_id, email)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (id) DO NOTHING
+        """,
+        user_uuid, external_id, email
+    )
+
+
+async def check_and_record_usage(conn, user_uuid: uuid.UUID, skill: str, per_day: int, per_month: int | None = None) -> bool:
+    """Structural gating: returns True (and records the call) if the user is still within
+    quota for `skill`, False if the daily or monthly limit has been reached."""
+    now = datetime.utcnow()
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    count_day = await conn.fetchval(
+        "SELECT COUNT(*) FROM usage_log WHERE user_id = $1 AND skill = $2 AND created_at >= $3",
+        user_uuid, skill, day_start
+    )
+    if count_day >= per_day:
+        return False
+
+    if per_month:
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        count_month = await conn.fetchval(
+            "SELECT COUNT(*) FROM usage_log WHERE user_id = $1 AND skill = $2 AND created_at >= $3",
+            user_uuid, skill, month_start
+        )
+        if count_month >= per_month:
+            return False
+
+    await conn.execute(
+        "INSERT INTO usage_log (id, user_id, skill, created_at) VALUES ($1, $2, $3, NOW())",
+        uuid.uuid4(), user_uuid, skill
+    )
+    return True
+
+
+DB_MCP_URL = os.environ.get("DB_MCP_URL", "http://127.0.0.1:8001/sse")
+
+
+async def call_db_mcp_tool(tool_name: str, arguments: dict, user_id: str) -> str:
+    """Calls a library-db-mcp tool directly (outside of an agent run), passing the
+    authenticated user id via header exactly like the agent's McpToolset does."""
+    headers = {"X-User-ID": user_id}
+    token = os.environ.get("GCP_SECRET_MANAGER_DB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    async with sse_client(DB_MCP_URL, headers=headers) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool(tool_name, arguments)
+            return "\n".join(part.text for part in result.content if hasattr(part, "text"))
+
+
+def require_session_user_id(request: Request) -> str:
+    """Returns the authenticated user's id (Google `sub`) from the signed session
+    cookie set by /api/auth/google, or raises 401 if there is no active session."""
+    user_id = request.session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user_id
+
+
+class GoogleLoginRequest(BaseModel):
+    id_token: str
+
+
+@app.post("/api/auth/google")
+async def auth_google(req: GoogleLoginRequest, request: Request):
+    try:
+        claims = google_id_token.verify_oauth2_token(
+            req.id_token, google_auth_requests.Request(), GOOGLE_OAUTH_CLIENT_ID
+        )
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Invalid Google ID token: {e}")
+
+    google_sub = claims["sub"]
+    email = claims.get("email")
+    user_uuid = resolve_user_uuid(google_sub)
+
+    try:
+        conn = await get_db_conn()
+        try:
+            await ensure_user(conn, user_uuid, external_id=google_sub, email=email)
+        finally:
+            await conn.close()
+    except Exception as e:
+        return {"status": "error", "message": f"Database connection failed: {str(e)}"}
+
+    request.session["user_id"] = google_sub
+    request.session["email"] = email
+    return {"status": "success", "email": email}
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    user_id = request.session.get("user_id")
+    if not user_id:
+        return {"authenticated": False}
+    return {"authenticated": True, "email": request.session.get("email"), "user_id": user_id}
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request):
+    request.session.clear()
+    return {"status": "success"}
+
+
 class BookSaveRequest(BaseModel):
     title: str
     author: str
@@ -129,23 +316,25 @@ class BookSaveRequest(BaseModel):
     description: Optional[str] = ""
     status: Optional[str] = "unread"
 
-class AgentRunRequest(BaseModel):
-    prompt: str
-    image_bytes: Optional[str] = None # Base64 encoded string
+class ProcessBookPhotoRequest(BaseModel):
+    image_bytes: str  # Base64 encoded string
+
+class SearchBooksRequest(BaseModel):
+    query: Optional[str] = None
+
+class RecommendBooksRequest(BaseModel):
+    preference: Optional[str] = None
 
 @app.get("/api/library")
-async def get_library(user_id: str = "default-user"):
+async def get_library(request: Request):
+    user_id = require_session_user_id(request)
+    user_uuid = resolve_user_uuid(user_id)
     try:
         conn = await get_db_conn()
     except Exception as e:
         return {"status": "error", "message": f"Database connection failed: {str(e)}", "items": []}
-    
+
     try:
-        try:
-            user_uuid = uuid.UUID(user_id)
-        except ValueError:
-            user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
-            
         rows = await conn.fetch(
             """
             SELECT b.id, b.title, b.author, b.genre, b.description, ul.status
@@ -165,89 +354,62 @@ async def get_library(user_id: str = "default-user"):
         await conn.close()
 
 @app.post("/api/books")
-async def save_book_api(req: BookSaveRequest, user_id: str = "default-user"):
+async def save_book_api(req: BookSaveRequest, request: Request):
+    user_id = require_session_user_id(request)
+    user_uuid = resolve_user_uuid(user_id)
+
     try:
         conn = await get_db_conn()
+        try:
+            await ensure_user(conn, user_uuid)
+        finally:
+            await conn.close()
     except Exception as e:
         return {"status": "error", "message": f"Database connection failed: {str(e)}"}
-        
-    try:
-        try:
-            user_uuid = uuid.UUID(user_id)
-        except ValueError:
-            user_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, user_id)
-            
-        # Check if book exists
-        book_row = await conn.fetchrow(
-            "SELECT id FROM books WHERE title = $1 AND author = $2",
-            req.title, req.author
-        )
-        
-        if book_row:
-            book_uuid = book_row["id"]
-            await conn.execute(
-                "UPDATE books SET genre = COALESCE(NULLIF(genre, ''), $1), description = COALESCE(NULLIF(description, ''), $2) WHERE id = $3",
-                req.genre, req.description, book_uuid
-            )
-        else:
-            book_uuid = uuid.uuid4()
-            await conn.execute(
-                "INSERT INTO books (id, title, author, genre, description) VALUES ($1, $2, $3, $4, $5)",
-                book_uuid, req.title, req.author, req.genre, req.description
-            )
-            
-        # Link to library
-        link_row = await conn.fetchrow(
-            "SELECT id FROM user_library WHERE user_id = $1 AND book_id = $2",
-            user_uuid, book_uuid
-        )
-        if not link_row:
-            await conn.execute(
-                "INSERT INTO user_library (id, user_id, book_id, status, added_at) VALUES ($1, $2, $3, $4, NOW())",
-                uuid.uuid4(), user_uuid, book_uuid, req.status
-            )
-        else:
-            await conn.execute(
-                "UPDATE user_library SET status = $1 WHERE user_id = $2 AND book_id = $3",
-                req.status, user_uuid, book_uuid
-            )
-            
-        return {"status": "success", "message": "Book saved successfully"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-    finally:
-        await conn.close()
 
-@app.post("/api/agent/run")
-async def run_agent_api(req: AgentRunRequest, user_id: str = "default-user"):
+    # Writes go through the library-db-mcp save_book tool (not raw asyncpg here),
+    # so the MCP layer stays the single, restricted path for database mutations.
+    try:
+        result_text = await call_db_mcp_tool(
+            "save_book",
+            {
+                "title": req.title,
+                "author": req.author,
+                "genre": req.genre or "",
+                "description": req.description or "",
+                "status": req.status or "unread",
+            },
+            user_id,
+        )
+        if result_text.lower().startswith("error"):
+            return {"status": "error", "message": result_text}
+        return {"status": "success", "message": result_text}
+    except Exception as e:
+        logger.exception("Failed to save book via library-db-mcp")
+        return {"status": "error", "message": str(e)}
+
+async def run_agent_pipeline(user_id: str, text: str, image_bytes: Optional[str] = None) -> dict:
+    """Shared runner invocation used by the three dedicated skill endpoints below."""
     runner = app.state.runner
-    
+
     try:
         session_id = str(uuid.UUID(user_id))
     except ValueError:
         session_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, user_id))
-        
+
     from google.genai import types
     import base64
-    
-    if req.image_bytes:
+
+    parts = [types.Part.from_text(text=text)]
+    if image_bytes:
         try:
-            img_data = base64.b64decode(req.image_bytes)
-            new_message = types.Content(
-                role="user",
-                parts=[
-                    types.Part.from_text(text=req.prompt),
-                    types.Part.from_bytes(data=img_data, mime_type="image/jpeg")
-                ]
-            )
+            img_data = base64.b64decode(image_bytes)
+            parts.append(types.Part.from_bytes(data=img_data, mime_type="image/jpeg"))
         except Exception as e:
             return {"status": "error", "message": f"Failed to decode image bytes: {str(e)}"}
-    else:
-        new_message = types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=req.prompt)]
-        )
-        
+
+    new_message = types.Content(role="user", parts=parts)
+
     try:
         session_service = runner.session_service
         session = await session_service.get_session(
@@ -261,7 +423,7 @@ async def run_agent_api(req: AgentRunRequest, user_id: str = "default-user"):
                 user_id=user_id,
                 session_id=session_id
             )
-            
+
         final_output = None
         async for event in runner.run_async(
             user_id=user_id,
@@ -270,18 +432,86 @@ async def run_agent_api(req: AgentRunRequest, user_id: str = "default-user"):
         ):
             if event.output:
                 final_output = event.output
-                
+
         if final_output is None:
             return {"status": "error", "message": "No output generated by agent"}
-            
+
         try:
             return json.loads(final_output)
         except Exception:
             return {"status": "success", "output": final_output}
-            
+
     except Exception as e:
         logger.exception("Error during agent run API execution")
         return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/process-book-photo")
+async def process_book_photo_api(req: ProcessBookPhotoRequest, request: Request):
+    user_id = require_session_user_id(request)
+    user_uuid = resolve_user_uuid(user_id)
+    try:
+        conn = await get_db_conn()
+        try:
+            await ensure_user(conn, user_uuid)
+            allowed = await check_and_record_usage(conn, user_uuid, "process-book-photo", per_day=3, per_month=10)
+        finally:
+            await conn.close()
+    except Exception as e:
+        return {"status": "error", "message": f"Database connection failed: {str(e)}"}
+
+    if not allowed:
+        return {
+            "status": "quota_exceeded",
+            "draft_data": {"title": None, "author": None, "genre": None, "description": None}
+        }
+
+    return await run_agent_pipeline(user_id, "Process this book cover photo", image_bytes=req.image_bytes)
+
+
+@app.post("/api/search-books")
+async def search_books_api(req: SearchBooksRequest, request: Request):
+    user_id = require_session_user_id(request)
+    user_uuid = resolve_user_uuid(user_id)
+    try:
+        conn = await get_db_conn()
+        try:
+            await ensure_user(conn, user_uuid)
+            allowed = await check_and_record_usage(conn, user_uuid, "search-books", per_day=3)
+        finally:
+            await conn.close()
+    except Exception as e:
+        return {"status": "error", "message": f"Database connection failed: {str(e)}", "items": []}
+
+    if not allowed:
+        return {"status": "quota_exceeded", "items": []}
+
+    text = f"Search for {req.query}" if req.query else "Search (empty prompt)"
+    return await run_agent_pipeline(user_id, text)
+
+
+@app.post("/api/recommend-books")
+async def recommend_books_api(req: RecommendBooksRequest, request: Request):
+    user_id = require_session_user_id(request)
+    user_uuid = resolve_user_uuid(user_id)
+    try:
+        conn = await get_db_conn()
+        try:
+            await ensure_user(conn, user_uuid)
+            allowed = await check_and_record_usage(conn, user_uuid, "recommend-books", per_day=5)
+        finally:
+            await conn.close()
+    except Exception as e:
+        return {"status": "error", "message": f"Database connection failed: {str(e)}", "items": []}
+
+    if not allowed:
+        return {"status": "quota_exceeded", "items": []}
+
+    text = (
+        f"Recommend some books based on my shelf: {req.preference}"
+        if req.preference else "Recommend some books based on my shelf"
+    )
+    return await run_agent_pipeline(user_id, text)
 
 
 @app.post("/feedback")

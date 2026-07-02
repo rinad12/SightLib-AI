@@ -49,14 +49,15 @@ async def list_tools():
         ),
         Tool(
             name="save_book",
-            description="Saves or updates a book in the library and links it to the user.",
+            description="Saves or updates a book in the library and links it to the user, optionally setting reading status.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "title": {"type": "string"},
                     "author": {"type": "string"},
                     "genre": {"type": "string"},
-                    "description": {"type": "string"}
+                    "description": {"type": "string"},
+                    "status": {"type": "string"}
                 },
                 "required": ["title", "author"]
             }
@@ -108,6 +109,7 @@ async def call_tool(name: str, arguments: dict):
             author = arguments.get("author")
             genre = arguments.get("genre") or ""
             description = arguments.get("description") or ""
+            status = arguments.get("status") or "unread"
 
             try:
                 user_uuid = uuid.UUID(user_id)
@@ -134,7 +136,7 @@ async def call_tool(name: str, arguments: dict):
                     book_uuid, title, author, genre, description
                 )
 
-            # Link to user_library if not already linked
+            # Link to user_library if not already linked, otherwise update reading status
             link_row = await conn.fetchrow(
                 "SELECT id FROM user_library WHERE user_id = $1 AND book_id = $2",
                 user_uuid, book_uuid
@@ -142,8 +144,13 @@ async def call_tool(name: str, arguments: dict):
             if not link_row:
                 link_uuid = uuid.uuid4()
                 await conn.execute(
-                    "INSERT INTO user_library (id, user_id, book_id, status, added_at) VALUES ($1, $2, $3, 'unread', NOW())",
-                    link_uuid, user_uuid, book_uuid
+                    "INSERT INTO user_library (id, user_id, book_id, status, added_at) VALUES ($1, $2, $3, $4, NOW())",
+                    link_uuid, user_uuid, book_uuid, status
+                )
+            else:
+                await conn.execute(
+                    "UPDATE user_library SET status = $1 WHERE user_id = $2 AND book_id = $3",
+                    status, user_uuid, book_uuid
                 )
 
             return [TextContent(type="text", text="Book saved successfully")]
